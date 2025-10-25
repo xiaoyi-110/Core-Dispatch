@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using Camera;
 using Gameplay.GameplayObjects.Character.PlayerModules;
 using Gameplay.GameplayObjects.Character.PlayerState;
 using Gameplay.IFSM;
@@ -14,7 +13,6 @@ namespace Gameplay.GameplayObjects.Character
         [Header("Movement Settings")]
         [SerializeField] private float moveSpeed=5f;
         [SerializeField] private float rotateSpeed = 5f;
-        [SerializeField] private CameraController cameraController;
 
         private bool _useNetwork = false;
 
@@ -227,8 +225,7 @@ namespace Gameplay.GameplayObjects.Character
 
             if (normalizedInput.sqrMagnitude > 0.01f)
             {
-                // 使用摄像机平面旋转来确定世界空间移动方向 (用于旋转)
-                moveDirection = cameraController.GetPlanarRotation() * normalizedInput;
+
                 _targetRotation = Quaternion.LookRotation(moveDirection);
             }
             PlayerAnimator.UpdateMovement(new Vector2(normalizedInput.x, normalizedInput.z));
