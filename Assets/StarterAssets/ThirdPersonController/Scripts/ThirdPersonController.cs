@@ -115,6 +115,7 @@ namespace StarterAssets
         private StarterAssetsInputs _input;
         private GameObject _mainCamera;
         private PlayerAnimation _playerAnimation;
+        private PlayerShooterController _shooterController;
 
         private bool _rotateOnMove = true;
 
@@ -153,6 +154,7 @@ namespace StarterAssets
             _controller = GetComponent<CharacterController>();
             _input = GetComponent<StarterAssetsInputs>();
             _playerAnimation = GetComponent<PlayerAnimation>();
+            _shooterController = GetComponent<PlayerShooterController>();
 #if ENABLE_INPUT_SYSTEM 
             _playerInput = GetComponent<PlayerInput>();
 #else
@@ -180,7 +182,6 @@ namespace StarterAssets
             CameraRotation();
         }
 
-       
 
         private void GroundedCheck()
         {
@@ -217,7 +218,7 @@ namespace StarterAssets
 
         private void HandleAim()
         {
-            if (_input.aim)
+            if (_input.aim&&_shooterController.IsArmed)
             {
                 IsAiming = true;
                 _playerAnimation.SetAim(true);
