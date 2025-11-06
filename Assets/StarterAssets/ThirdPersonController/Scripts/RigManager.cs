@@ -5,7 +5,7 @@ using UnityEngine.Animations.Rigging;
 
 namespace StarterAssets
 {
-    public class RigManager : MonoSingleton<RigManager>
+    public class RigManager : MonoBehaviour
     {
         [SerializeField] private MultiAimConstraint rightHand = null;
         [SerializeField] private TwoBoneIKConstraint leftHand=null;
@@ -27,9 +27,8 @@ namespace StarterAssets
             }
         }
 
-        protected override void Awake()
+        private void Awake()
         {
-            base.Awake();
             _originalRightHandOffset = rightHand.data.offset;
             _originalBodyOffset = body.data.offset;
         }

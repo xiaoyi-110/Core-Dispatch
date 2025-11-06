@@ -15,6 +15,8 @@ namespace StarterAssets
         private int _animIDArmed;
         private int _animIDShoot;
         private int _animIDReload;
+        private int _animIDEquip;
+        private int _animIDHolster;
         private int _animIDMotionSpeed;
         private int _animIDAim;
         private int _animSpeedX;
@@ -43,6 +45,8 @@ namespace StarterAssets
             _animIDAim = Animator.StringToHash("IsAiming");
             _animSpeedX = Animator.StringToHash("Speed_X");
             _animSpeedY = Animator.StringToHash("Speed_Y");
+            _animIDEquip = Animator.StringToHash("Equip");
+            _animIDHolster = Animator.StringToHash("Holster");
         }
 
         public void SetSpeed(float speed) => _animator.SetFloat(_animIDSpeed, speed);
@@ -54,6 +58,8 @@ namespace StarterAssets
         public void SetArmed(bool armed) => _animator.SetBool(_animIDArmed, armed);
         public void TriggerShoot() => _animator.SetTrigger(_animIDShoot);
         public void TriggerReload() => _animator.SetTrigger(_animIDReload);
+        public void TriggerEquip() => _animator.SetTrigger(_animIDEquip);
+        public void TriggerHolster() => _animator.SetTrigger(_animIDHolster);
 
         public void SetAim(bool aim) => _animator.SetBool(_animIDAim, aim);
 

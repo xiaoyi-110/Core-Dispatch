@@ -47,7 +47,7 @@ namespace Gameplay.GameplayObjects.Items
             _character = character;
             _damage = damage;
             transform.LookAt(target);
-            _rigidbody.velocity = transform.forward * speed;
+            _rigidbody.velocity = transform.forward.normalized * speed;
             Destroy(gameObject, 5f);
         }
 
@@ -65,8 +65,12 @@ namespace Gameplay.GameplayObjects.Items
                 character.TakeDamage(_character,collision.transform,_damage);
             }else if (defaultImpact != null)
             {
-                Transform impact = Instantiate(defaultImpact, collision.contacts[0].point, Quaternion.FromToRotation(Vector3.up,collision.contacts[0].normal));
-                Destroy(impact.gameObject, 30f);
+                if(collision.gameObject.layer!=LayerMask.NameToLayer("LocalPlayer")&& collision.gameObject.layer != LayerMask.NameToLayer("NetworkPlayer"))
+                {
+                    Transform impact = Instantiate(defaultImpact, collision.contacts[0].point, Quaternion.FromToRotation(Vector3.up, collision.contacts[0].normal));
+                    Destroy(impact.gameObject, 30f);
+                }
+                
             }
 
             Destroy(gameObject);

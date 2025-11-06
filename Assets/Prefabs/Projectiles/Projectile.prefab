@@ -120,7 +120,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   speed: 20
-  defaultImpact: {fileID: 0}
+  defaultImpact: {fileID: 5180846845084010534, guid: 059cd3bc141e30240970bfb29dd507d5,
+    type: 3}
 --- !u!54 &931264801723818538
 Rigidbody:
   m_ObjectHideFlags: 0

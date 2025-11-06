@@ -16,6 +16,7 @@ namespace StarterAssets
 		public bool shoot;
 		public bool run;
 		public bool reload;
+		public float switchWeapon;
 
         [Header("Movement Settings")]
 		public bool analogMovement;
@@ -65,6 +66,11 @@ namespace StarterAssets
         {
             ReloadInput(value.isPressed);
         }
+
+		public void OnSwitchWeapon(InputValue value)
+		{
+			SwitchWeaponInput(value.Get<float>());
+        }
 #endif
 
 
@@ -105,6 +111,10 @@ namespace StarterAssets
             reload = newReloadState;
         }
 
+		public void SwitchWeaponInput(float newSwitchWeaponState)
+		{
+			switchWeapon = newSwitchWeaponState;
+        }
 
         private void OnApplicationFocus(bool hasFocus)
 		{

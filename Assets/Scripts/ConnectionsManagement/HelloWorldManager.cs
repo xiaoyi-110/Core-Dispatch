@@ -1,5 +1,5 @@
 using UnityEngine;
-using Gameplay.GameplayObjects.Character;
+using Gameplay.GameplayObjects.Characters;
 using Unity.Netcode;
 
 namespace ConnectionsManagement

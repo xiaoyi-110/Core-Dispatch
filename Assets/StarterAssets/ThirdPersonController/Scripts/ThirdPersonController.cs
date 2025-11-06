@@ -20,8 +20,8 @@ namespace StarterAssets
         public float WalkSpeed = 2.0f;
         public float RunSpeed = 4.0f;
         private float targetSpeed;
-        private bool _isRunning = false;
-        private float _speedAnimationMultiplier = 0;
+        //private bool _isRunning = false;
+        //private float _speedAnimationMultiplier = 0;
 
         [Tooltip("Sprint speed of the character in m/s")]
         public float SprintSpeed = 5.335f;
@@ -29,7 +29,7 @@ namespace StarterAssets
         public float SprintDuration = 1.0f; // 冲刺持续时间（秒）
         public float SprintCooldown = 1.0f; // 冲刺冷却（可选）
 
-        private bool _isSprinting = false;
+        //private bool _isSprinting = false;
         private float _sprintTimer = 0f;
         private float _sprintCooldownTimer = 0f;
 
@@ -105,8 +105,7 @@ namespace StarterAssets
         private float _jumpTimeoutDelta;
         private float _fallTimeoutDelta;
 
-        public bool IsAiming { get; private set; } = false;
-        public bool IsReloading { get; private set; } = false;
+        //public bool IsAiming { get; private set; } = false;
 
 #if ENABLE_INPUT_SYSTEM
         private PlayerInput _playerInput;
@@ -116,11 +115,13 @@ namespace StarterAssets
         private GameObject _mainCamera;
         private PlayerAnimation _playerAnimation;
         private PlayerShooterController _shooterController;
+        private Character _character;
+        private CameraManager _cameraManager;
 
         private bool _rotateOnMove = true;
 
         private const float _threshold = 0.01f;
-        private Vector2 _aimedMovingAnimationInput=Vector2.zero;
+        //private Vector2 _aimedMovingAnimationInput=Vector2.zero;
 
 
         private bool IsCurrentDeviceMouse
@@ -138,16 +139,14 @@ namespace StarterAssets
 
         private void Awake()
         {
-            //_mainCamera=CameraManager.Instance.MainCamera.gameObject;
-            //CameraManager.Instance.PlayerVirtualCamera.Follow=CinemachineCameraTarget.transform;
-            //CameraManager.Instance.AimVirtualCamera.Follow=CinemachineCameraTarget.transform;
+            _cameraManager = FindObjectOfType<CameraManager>();
         }
 
         private void Start()
         {
-            _mainCamera = CameraManager.Instance.MainCamera.gameObject;
-            CameraManager.Instance.PlayerVirtualCamera.Follow = CinemachineCameraTarget.transform;
-            CameraManager.Instance.AimVirtualCamera.Follow = CinemachineCameraTarget.transform;
+            _mainCamera = _cameraManager.MainCamera.gameObject;
+            _cameraManager.PlayerVirtualCamera.Follow = CinemachineCameraTarget.transform;
+            _cameraManager.AimVirtualCamera.Follow = CinemachineCameraTarget.transform;
 
             _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
             
@@ -155,6 +154,7 @@ namespace StarterAssets
             _input = GetComponent<StarterAssetsInputs>();
             _playerAnimation = GetComponent<PlayerAnimation>();
             _shooterController = GetComponent<PlayerShooterController>();
+            _character= GetComponent<Character>();
 #if ENABLE_INPUT_SYSTEM 
             _playerInput = GetComponent<PlayerInput>();
 #else
@@ -171,6 +171,7 @@ namespace StarterAssets
         {
             HandleAim();
             HandleReload();
+            HandleSwitchWeapon();
             HandleSprint();
             JumpAndGravity();
             GroundedCheck();
@@ -218,15 +219,15 @@ namespace StarterAssets
 
         private void HandleAim()
         {
-            if (_input.aim&&_shooterController.IsArmed)
+            if (_input.aim&&_character.IsArmed)
             {
-                IsAiming = true;
-                _playerAnimation.SetAim(true);
+                _character.IsAiming = true;
+                //_playerAnimation.SetAim(true);
             }
             else
             {
-                IsAiming = false;
-                _playerAnimation.SetAim(false);
+                _character.IsAiming = false;
+                //_playerAnimation.SetAim(false);
             }
         }
 
@@ -235,34 +236,36 @@ namespace StarterAssets
             if (_input.reload)
             {
                 _input.reload = false;
-                IsReloading = true;
-                _playerAnimation.TriggerReload();
-                StartCoroutine(ResetReload());
+                _character.Reload();            
             }
         }
 
-        private IEnumerator ResetReload()
+        private void HandleSwitchWeapon()
         {
-            yield return new WaitForSeconds(1.5f); 
-            IsReloading = false;
+            if (_input.switchWeapon!=0)
+            {
+                _character.SwitchWeapon(_input.switchWeapon);
+                            
+            }
         }
+
         private void HandleSprint()
         {
             if (_sprintCooldownTimer > 0f)
                 _sprintCooldownTimer -= Time.deltaTime;
 
-            if (_input.sprint && !_isSprinting && _sprintCooldownTimer <= 0f&&!IsAiming)
+            if (_input.sprint && !_character.IsSprinting && _sprintCooldownTimer <= 0f&&!_character.IsAiming)
             {
-                _isSprinting = true;
+                _character.IsSprinting = true;
                 _sprintTimer = SprintDuration;
             }
 
-            if (_isSprinting)
+            if (_character.IsSprinting)
             {
                 _sprintTimer -= Time.deltaTime;
                 if (_sprintTimer <= 0f)
                 {
-                    _isSprinting = false;
+                    _character.IsSprinting = false;
                     _sprintCooldownTimer = SprintCooldown; 
                 }
             }
@@ -273,36 +276,32 @@ namespace StarterAssets
             // set target speed based on move speed, sprint speed and if sprint is pressed
             if(_input.run)
             {
-                _isRunning = !_isRunning;
+                _character.IsRunning = !_character.IsRunning;
                 _input.run = false;
             }
-            targetSpeed = WalkSpeed;
-            if (_isSprinting)
+
+            if (_character.IsSprinting)
             {
                 targetSpeed = SprintSpeed;
-                _speedAnimationMultiplier = 3.0f;
             }
-            else if (_isRunning)
+            else if (_character.IsRunning)
             {
                 targetSpeed = RunSpeed;
-                _speedAnimationMultiplier = 2.0f;
             }
             else
             {
-                _speedAnimationMultiplier = 1.0f;
+                targetSpeed =WalkSpeed;
             }
-            // a simplistic acceleration and deceleration designed to be easy to remove, replace, or iterate upon
 
-            // note: Vector2's == operator uses approximation so is not floating point error prone, and is cheaper than magnitude
-            // if there is no input, set the target speed to 0
             if (_input.move == Vector2.zero)
             {
                 targetSpeed = 0.0f;
-                _speedAnimationMultiplier = 0;
+                _character.SpeedAnimationMultiplier = 0;
             }
 
-            _aimedMovingAnimationInput=Vector2.Lerp(_aimedMovingAnimationInput,_input.move.normalized*_speedAnimationMultiplier,Time.deltaTime*SpeedChangeRate);
-            _playerAnimation.SetAimMoveSpeed(_aimedMovingAnimationInput.x,_aimedMovingAnimationInput.y);
+            _character.IsGrounded=_controller.isGrounded;
+            _cameraManager.IsAiming=_character.IsAiming;
+            _character.AimTarget = _cameraManager.MouseWorldPosition;
             // a reference to the players current horizontal velocity
             float currentHorizontalSpeed = new Vector3(_controller.velocity.x, 0.0f, _controller.velocity.z).magnitude;
 
@@ -326,7 +325,7 @@ namespace StarterAssets
                 _speed = targetSpeed;
             }
 
-            _animationBlend = Mathf.Lerp(_animationBlend, _speedAnimationMultiplier, Time.deltaTime * SpeedChangeRate);
+            _animationBlend = Mathf.Lerp(_animationBlend, _character.SpeedAnimationMultiplier, Time.deltaTime * SpeedChangeRate);
             if (_animationBlend < 0.01f) _animationBlend = 0f;
 
             // normalise input direction

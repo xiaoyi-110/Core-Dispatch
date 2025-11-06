@@ -4,7 +4,7 @@ using UnityEngine;
 using Cinemachine;
 namespace StarterAssets
 {
-    public class CameraManager : MonoSingleton<CameraManager>
+    public class CameraManager : MonoBehaviour
     {
         [SerializeField] private Camera mainCamera;public Camera MainCamera
         {
@@ -29,9 +29,8 @@ namespace StarterAssets
 
         public Vector3 MouseWorldPosition{get;private set;}
 
-        protected override void Awake()
+        private void Awake()
         {
-            base.Awake();
             cameraBrain.m_DefaultBlend.m_Time = 0.1f;
         }
 

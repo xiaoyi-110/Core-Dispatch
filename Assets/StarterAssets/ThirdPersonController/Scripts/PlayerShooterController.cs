@@ -15,11 +15,12 @@ namespace StarterAssets
         private PlayerAnimation _animation;
         private CharacterController _characterController;
         private Character _character;
+        private RigManager _rigManager;
+        private CameraManager _cameraManager;   
 
-        private float _aimRigWeight = 0f;
-        private float _leftHandWeight = 0f;
+        //private float _aimRigWeight = 0f;
+        //private float _leftHandWeight = 0f;
 
-        public bool IsArmed { get; private set; } = false;
         private void Awake()
         {
             _thirdPersonController = GetComponent<ThirdPersonController>();
@@ -27,38 +28,26 @@ namespace StarterAssets
             _animation = GetComponent<PlayerAnimation>();
             _characterController=GetComponent<CharacterController>();
             _character = GetComponent<Character>();
+            _cameraManager = FindObjectOfType<CameraManager>();
+            _rigManager = GetComponent<RigManager>();
         }
         
         private void Update()
         {
-            //if(Input.GetKeyDown(KeyCode.Q))
-            //{
-            //    isArmed = !isArmed;
-            //    playerAnimation.SetArmed(isArmed);
-            //}
-            IsArmed = _character.CurrentWeapon != null;
-            _animation.SetArmed(IsArmed);
             HandleAiming();
             HandleShooting();
-            HandleReloading();
         }
 
         private void HandleAiming()
         {
-            _aimRigWeight = Mathf.Lerp(_aimRigWeight, IsArmed&&_thirdPersonController.IsAiming && !_thirdPersonController.IsReloading ? 1f : 0f, Time.deltaTime * 10f);
-            _leftHandWeight=Mathf.Lerp(_leftHandWeight,IsArmed&&(_thirdPersonController.IsAiming||(_characterController.isGrounded)&&_character.CurrentWeapon.GetWeaponType == Weapon.WeaponType.TwoHanded ) && !_thirdPersonController.IsReloading ? 1f : 0f, Time.deltaTime * 10f);
-            
-            RigManager.Instance.AimWeight = _aimRigWeight;
-            RigManager.Instance.LeftHandWeight = _leftHandWeight;
-            RigManager.Instance.AimTarget = CameraManager.Instance.MouseWorldPosition;
-            if (_thirdPersonController.IsAiming&&IsArmed)
+            if (_character.IsAiming&&_character.IsArmed)
             {
-                CameraManager.Instance.IsAiming=true;
-                _thirdPersonController.SetSensitivity(CameraManager.Instance.AimSensitivity);
+                _cameraManager.IsAiming=true;
+                _thirdPersonController.SetSensitivity(_cameraManager.AimSensitivity);
                 _thirdPersonController.SetRotateOnMove(false);
                 _animation.SetAimLayerWeight(1f);
 
-                Vector3 worldAimTarget = CameraManager.Instance.MouseWorldPosition;
+                Vector3 worldAimTarget = _cameraManager.MouseWorldPosition;
                 worldAimTarget.y = transform.position.y;
                 Vector3 aimDirection = (worldAimTarget - transform.position).normalized;
 
@@ -66,8 +55,8 @@ namespace StarterAssets
             }
             else
             {
-                CameraManager.Instance.IsAiming = false;
-                _thirdPersonController.SetSensitivity(CameraManager.Instance.NormalSensitivity);
+                _cameraManager.IsAiming = false;
+                _thirdPersonController.SetSensitivity(_cameraManager.NormalSensitivity);
                 _thirdPersonController.SetRotateOnMove(true);
                 _animation.SetAimLayerWeight(0f);
             }
@@ -77,28 +66,13 @@ namespace StarterAssets
 
         private void HandleShooting()
         {
-            if (_inputs.shoot&&IsArmed&& _thirdPersonController.IsAiming&&!_thirdPersonController.IsReloading&&_character.CurrentWeapon.CanShoot(_character,CameraManager.Instance.MouseWorldPosition))
+            if (_inputs.shoot&&_character.IsArmed && _character.IsAiming&&!_character.IsReloading&&_character.CurrentWeapon.Shoot(_character,_cameraManager.MouseWorldPosition))
             {
-                RigManager.Instance.ApplyWeaponKick(_character.CurrentWeapon.HandKick, _character.CurrentWeapon.BodyKick);
+                _rigManager.ApplyWeaponKick(_character.CurrentWeapon.HandKick, _character.CurrentWeapon.BodyKick);
                 _animation.TriggerShoot();
                 Debug.Log("Shoot");
                 _inputs.shoot = false;
             }
         }
-
-        private void HandleReloading()
-        {
-            if (_thirdPersonController.IsReloading && IsArmed)
-            {
-                _animation.SetAimLayerWeight(1f);
-            }
-            else
-            {
-                _animation.SetAimLayerWeight(0f);
-            }
-        }
     }
-    
-
-
 }
