@@ -1,7 +1,10 @@
-﻿using System.Collections;
+﻿using Gameplay.GameplayObjects.Items;
+using Managers;
+using System.Collections;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM 
 using UnityEngine.InputSystem;
+using UnityEngine.Windows;
 #endif
 
 /* Note: animations are called via the controller for both the character and capsule using animator null checks
@@ -57,21 +60,9 @@ namespace StarterAssets
         [Tooltip("Time required to pass before being able to jump again. Set to 0f to instantly jump again")]
         public float JumpTimeout = 0.50f;
 
-        [Tooltip("Time required to pass before entering the fall state. Useful for walking down stairs")]
-        public float FallTimeout = 0.15f;
+        //[Tooltip("Time required to pass before entering the fall state. Useful for walking down stairs")]
+        //public float FallTimeout = 0.15f;
 
-        [Header("Player Grounded")]
-        [Tooltip("If the character is grounded or not. Not part of the CharacterController built in grounded check")]
-        public bool Grounded = true;
-
-        [Tooltip("Useful for rough ground")]
-        public float GroundedOffset = -0.14f;
-
-        [Tooltip("The radius of the grounded check. Should match the radius of the CharacterController")]
-        public float GroundedRadius = 0.28f;
-
-        [Tooltip("What layers the character uses as ground")]
-        public LayerMask GroundLayers;
 
         [Header("Cinemachine")]
         [Tooltip("The follow target set in the Cinemachine Virtual Camera that the camera will follow")]
@@ -95,7 +86,7 @@ namespace StarterAssets
 
         // player
         private float _speed;
-        private float _animationBlend;
+        //private float _animationBlend;
         private float _targetRotation = 0.0f;
         private float _rotationVelocity;
         private float _verticalVelocity;
@@ -103,20 +94,18 @@ namespace StarterAssets
 
         // timeout deltatime
         private float _jumpTimeoutDelta;
-        private float _fallTimeoutDelta;
+        //private float _fallTimeoutDelta;
 
         //public bool IsAiming { get; private set; } = false;
 
-#if ENABLE_INPUT_SYSTEM
         private PlayerInput _playerInput;
-#endif
         private CharacterController _controller;
         private StarterAssetsInputs _input;
         private GameObject _mainCamera;
         private PlayerAnimation _playerAnimation;
-        private PlayerShooterController _shooterController;
         private Character _character;
         private CameraManager _cameraManager;
+        private RigManager _rigManager;
 
         private bool _rotateOnMove = true;
 
@@ -136,45 +125,57 @@ namespace StarterAssets
             }
         }
 
-
         private void Awake()
         {
+            _controller = GetComponent<CharacterController>();
+            _input = GetComponent<StarterAssetsInputs>();
+            _playerAnimation = GetComponent<PlayerAnimation>();
+            _character = GetComponent<Character>();
+            _playerInput = GetComponent<PlayerInput>();
             _cameraManager = FindObjectOfType<CameraManager>();
+            _rigManager = GetComponent<RigManager>();
         }
 
         private void Start()
-        {
+        {           
+            //_controller = GetComponent<CharacterController>();
+            //_input = GetComponent<StarterAssetsInputs>();
+            //_playerAnimation = GetComponent<PlayerAnimation>();
+            //_shooterController = GetComponent<PlayerShooterController>();
+            //_character= GetComponent<Character>();
+            //_playerInput = GetComponent<PlayerInput>();
+            //_cameraManager = FindObjectOfType<CameraManager>();
+
+            if (!_character.IsOwner)
+            {
+                Destroy(this);
+                Destroy(_playerInput);
+                Destroy(_input);
+                Destroy(_controller);
+                return;
+            }
+            _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
             _mainCamera = _cameraManager.MainCamera.gameObject;
             _cameraManager.PlayerVirtualCamera.Follow = CinemachineCameraTarget.transform;
             _cameraManager.AimVirtualCamera.Follow = CinemachineCameraTarget.transform;
 
-            _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
-            
-            _controller = GetComponent<CharacterController>();
-            _input = GetComponent<StarterAssetsInputs>();
-            _playerAnimation = GetComponent<PlayerAnimation>();
-            _shooterController = GetComponent<PlayerShooterController>();
-            _character= GetComponent<Character>();
-#if ENABLE_INPUT_SYSTEM 
-            _playerInput = GetComponent<PlayerInput>();
-#else
-			Debug.LogError( "Starter Assets package is missing dependencies. Please use Tools/Starter Assets/Reinstall Dependencies to fix it");
-#endif
 
 
             // reset our timeouts on start
             _jumpTimeoutDelta = JumpTimeout;
-            _fallTimeoutDelta = FallTimeout;
+            //_fallTimeoutDelta = FallTimeout;
         }
 
         private void Update()
         {
             HandleAim();
+            HandleShooting();
             HandleReload();
             HandleSwitchWeapon();
             HandleSprint();
             JumpAndGravity();
-            GroundedCheck();
+            HandleHoslterWeapon();
+            ShowPickupUI();
             Move();
         }
 
@@ -184,17 +185,6 @@ namespace StarterAssets
         }
 
 
-        private void GroundedCheck()
-        {
-            // set sphere position, with offset
-            Vector3 spherePosition = new Vector3(transform.position.x, transform.position.y - GroundedOffset,
-                transform.position.z);
-            Grounded = Physics.CheckSphere(spherePosition, GroundedRadius, GroundLayers,
-                QueryTriggerInteraction.Ignore);
-
-            // update animator if using character
-            _playerAnimation?.SetGrounded(Grounded);
-        }
 
         private void CameraRotation()
         {
@@ -222,21 +212,54 @@ namespace StarterAssets
             if (_input.aim&&_character.IsArmed)
             {
                 _character.IsAiming = true;
-                //_playerAnimation.SetAim(true);
             }
             else
             {
                 _character.IsAiming = false;
-                //_playerAnimation.SetAim(false);
+            }
+            if (_character.IsAiming && _character.IsArmed)
+            {
+                _cameraManager.IsAiming = true;
+                SetSensitivity(_cameraManager.AimSensitivity);
+                SetRotateOnMove(false);
+                _playerAnimation.SetAimLayerWeight(1f);
+
+                Vector3 worldAimTarget = _cameraManager.AimTargetPoint;
+                worldAimTarget.y = transform.position.y;
+                Vector3 aimDirection = (worldAimTarget - transform.position).normalized;
+
+                transform.forward = Vector3.Lerp(transform.forward, aimDirection, Time.deltaTime * 20f);
+            }
+            else
+            {
+                _cameraManager.IsAiming = false;
+                SetSensitivity(_cameraManager.NormalSensitivity);
+                SetRotateOnMove(true);
+                _playerAnimation.SetAimLayerWeight(0f);
             }
         }
 
+        private void HandleShooting()
+        {
+            if (_input.shoot)// && _character.IsArmed && _character.IsAiming && !_character.IsReloading && _character.CurrentWeapon.Shoot(_character, _cameraManager.MouseWorldPosition))
+            {
+                Debug.Log("tps shoot");
+                _character.Shoot();
+                //_rigManager.ApplyWeaponKick(_character.CurrentWeapon.HandKick, _character.CurrentWeapon.BodyKick);
+                //_playerAnimation.TriggerShoot();
+                //Debug.Log("Shoot");
+                _input.shoot = false;
+            }
+        }
         private void HandleReload()
         {
             if (_input.reload)
             {
+                if (!_character.IsReloading&&!_character.IsSwitchingWeapon)
+                {
+                    _character.Reload();
+                }
                 _input.reload = false;
-                _character.Reload();            
             }
         }
 
@@ -246,6 +269,16 @@ namespace StarterAssets
             {
                 _character.SwitchWeapon(_input.switchWeapon);
                             
+            }
+        }
+
+        private void HandleHoslterWeapon()
+        {
+            if (_input.holsterWeapon)
+            {
+                if (!_character.IsReloading && !_character.IsSwitchingWeapon)
+                { _character.HolsterWeapon(); }
+                _input.holsterWeapon = false;
             }
         }
 
@@ -271,6 +304,32 @@ namespace StarterAssets
             }
         }
 
+        private void ShowPickupUI()
+        {
+            float maxPickupDistance = 3f;
+            Item itemToPick=null;
+
+            if (CameraManager.Instance.AimTargetObject != null && CameraManager.Instance.AimTargetObject.tag == "Item" && Vector3.Distance(CameraManager.Instance.AimTargetObject.position, transform.position) <= maxPickupDistance)
+            {
+                itemToPick=CameraManager.Instance.AimTargetObject.GetComponent<Item>();
+                if (!itemToPick.CanBePickUp)
+                {
+                    itemToPick = null;
+                }
+            }
+            if (UIManager.Instance.ItemToPick != itemToPick)
+            {
+                UIManager.Instance.ItemToPick = itemToPick;
+            }
+            if (_input.pickupItem)
+            {
+                if(UIManager.Instance.ItemToPick != null)
+                {
+                    _character.PickupItem(UIManager.Instance.ItemToPick.NetworkId);
+                }
+                _input.pickupItem = false;
+            }
+        }
         private void Move()
         {
             // set target speed based on move speed, sprint speed and if sprint is pressed
@@ -299,9 +358,9 @@ namespace StarterAssets
                 _character.SpeedAnimationMultiplier = 0;
             }
 
-            _character.IsGrounded=_controller.isGrounded;
+            //_character.IsGrounded=_controller.isGrounded;
             _cameraManager.IsAiming=_character.IsAiming;
-            _character.AimTarget = _cameraManager.MouseWorldPosition;
+            _character.AimTarget = _cameraManager.AimTargetPoint;
             // a reference to the players current horizontal velocity
             float currentHorizontalSpeed = new Vector3(_controller.velocity.x, 0.0f, _controller.velocity.z).magnitude;
 
@@ -324,9 +383,9 @@ namespace StarterAssets
             {
                 _speed = targetSpeed;
             }
-
-            _animationBlend = Mathf.Lerp(_animationBlend, _character.SpeedAnimationMultiplier, Time.deltaTime * SpeedChangeRate);
-            if (_animationBlend < 0.01f) _animationBlend = 0f;
+            _character.MoveSpeed=_input.move==Vector2.zero?0.0f : _character.SpeedAnimationMultiplier;
+            //_animationBlend = Mathf.Lerp(_animationBlend, Time.deltaTime * SpeedChangeRate);
+            //if (_animationBlend < 0.01f) _animationBlend = 0f;
 
             // normalise input direction
             Vector3 inputDirection = new Vector3(_input.move.x, 0.0f, _input.move.y).normalized;
@@ -354,23 +413,16 @@ namespace StarterAssets
             _controller.Move(targetDirection.normalized * (_speed * Time.deltaTime) +
                              new Vector3(0.0f, _verticalVelocity, 0.0f) * Time.deltaTime);
 
-            // update animator if using character
-            _playerAnimation?.SetSpeed(_animationBlend);
-            _playerAnimation?.SetMotionSpeed(inputMagnitude);
+            //// update animator if using character
+            //_playerAnimation?.SetSpeed(_animationBlend);
+            //_playerAnimation?.SetMotionSpeed(inputMagnitude);
         }
 
         private void JumpAndGravity()
         {
-            if (Grounded)
+            if (_character.IsGrounded)
             {
-                // reset the fall timeout timer
-                _fallTimeoutDelta = FallTimeout;
 
-                // update animator if using character
-                _playerAnimation?.SetJump(false);
-                _playerAnimation?.SetFreeFall(false);
-
-                // stop our velocity dropping infinitely when grounded
                 if (_verticalVelocity < 0.0f)
                 {
                     _verticalVelocity = -2f;
@@ -379,11 +431,11 @@ namespace StarterAssets
                 // Jump
                 if (_input.jump && _jumpTimeoutDelta <= 0.0f)
                 {
+                    _jumpTimeoutDelta = JumpTimeout;
+                    _character.Jump();
                     // the square root of H * -2 * G = how much velocity needed to reach desired height
                     _verticalVelocity = Mathf.Sqrt(JumpHeight * -2f * Gravity);
 
-                    // update animator if using character
-                    _playerAnimation?.SetJump(true);
                 }
 
                 // jump timeout
@@ -398,15 +450,7 @@ namespace StarterAssets
                 _jumpTimeoutDelta = JumpTimeout;
 
                 // fall timeout
-                if (_fallTimeoutDelta >= 0.0f)
-                {
-                    _fallTimeoutDelta -= Time.deltaTime;
-                }
-                else
-                {
-                    // update animator if using character
-                    _playerAnimation?.SetFreeFall(true);
-                }
+                
 
                 // if we are not grounded, do not jump
                 _input.jump = false;
@@ -426,39 +470,39 @@ namespace StarterAssets
             return Mathf.Clamp(lfAngle, lfMin, lfMax);
         }
 
-        private void OnDrawGizmosSelected()
-        {
-            Color transparentGreen = new Color(0.0f, 1.0f, 0.0f, 0.35f);
-            Color transparentRed = new Color(1.0f, 0.0f, 0.0f, 0.35f);
+        //private void OnDrawGizmosSelected()
+        //{
+        //    Color transparentGreen = new Color(0.0f, 1.0f, 0.0f, 0.35f);
+        //    Color transparentRed = new Color(1.0f, 0.0f, 0.0f, 0.35f);
 
-            if (Grounded) Gizmos.color = transparentGreen;
-            else Gizmos.color = transparentRed;
+        //    if (Grounded) Gizmos.color = transparentGreen;
+        //    else Gizmos.color = transparentRed;
 
-            // when selected, draw a gizmo in the position of, and matching radius of, the grounded collider
-            Gizmos.DrawSphere(
-                new Vector3(transform.position.x, transform.position.y - GroundedOffset, transform.position.z),
-                GroundedRadius);
-        }
+        //    // when selected, draw a gizmo in the position of, and matching radius of, the grounded collider
+        //    Gizmos.DrawSphere(
+        //        new Vector3(transform.position.x, transform.position.y - GroundedOffset, transform.position.z),
+        //        GroundedRadius);
+        //}
 
-        private void OnFootstep(AnimationEvent animationEvent)
-        {
-            if (animationEvent.animatorClipInfo.weight > 0.5f)
-            {
-                if (FootstepAudioClips.Length > 0)
-                {
-                    var index = Random.Range(0, FootstepAudioClips.Length);
-                    AudioSource.PlayClipAtPoint(FootstepAudioClips[index], transform.TransformPoint(_controller.center), FootstepAudioVolume);
-                }
-            }
-        }
+        //private void OnFootstep(AnimationEvent animationEvent)
+        //{
+        //    if (animationEvent.animatorClipInfo.weight > 0.5f)
+        //    {
+        //        if (FootstepAudioClips.Length > 0)
+        //        {
+        //            var index = Random.Range(0, FootstepAudioClips.Length);
+        //            AudioSource.PlayClipAtPoint(FootstepAudioClips[index], transform.TransformPoint(_controller.center), FootstepAudioVolume);
+        //        }
+        //    }
+        //}
 
-        private void OnLand(AnimationEvent animationEvent)
-        {
-            if (animationEvent.animatorClipInfo.weight > 0.5f)
-            {
-                AudioSource.PlayClipAtPoint(LandingAudioClip, transform.TransformPoint(_controller.center), FootstepAudioVolume);
-            }
-        }
+        //private void OnLand(AnimationEvent animationEvent)
+        //{
+        //    if (animationEvent.animatorClipInfo.weight > 0.5f)
+        //    {
+        //        AudioSource.PlayClipAtPoint(LandingAudioClip, transform.TransformPoint(_controller.center), FootstepAudioVolume);
+        //    }
+        //}
 
         public void SetSensitivity(float sensitivity)
         {

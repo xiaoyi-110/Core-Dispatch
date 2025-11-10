@@ -51,8 +51,8 @@ namespace StarterAssets
 
         public void SetSpeed(float speed) => _animator.SetFloat(_animIDSpeed, speed);
         public void SetMotionSpeed(float motionSpeed) => _animator.SetFloat(_animIDMotionSpeed, motionSpeed);
-        public void SetGrounded(bool grounded) => _animator.SetBool(_animIDGrounded, grounded);
-        public void SetJump(bool jump) => _animator.SetBool(_animIDJump, jump);
+        public void SetGrounded(bool grounded) => _animator.SetBool(_animIDGrounded, grounded);  
+        public void TriggerJump()=>_animator.SetTrigger(_animIDJump);
         public void SetFreeFall(bool fall) => _animator.SetBool(_animIDFreeFall, fall);
 
         public void SetArmed(bool armed) => _animator.SetBool(_animIDArmed, armed);

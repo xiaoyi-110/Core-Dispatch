@@ -4,7 +4,7 @@ using UnityEngine;
 using Cinemachine;
 namespace StarterAssets
 {
-    public class CameraManager : MonoBehaviour
+    public class CameraManager : MonoSingleton<CameraManager>
     {
         [SerializeField] private Camera mainCamera;public Camera MainCamera
         {
@@ -27,10 +27,12 @@ namespace StarterAssets
         [SerializeField] private LayerMask aimColliderLayerMask = new LayerMask();
         public bool IsAiming { get; set; } = false;
 
-        public Vector3 MouseWorldPosition{get;private set;}
+        public Vector3 AimTargetPoint{get;private set;}
+        private Transform _aimTargetObject=null;public Transform AimTargetObject { get => _aimTargetObject; }
 
-        private void Awake()
+        protected override void Awake()
         {
+            base.Awake();
             cameraBrain.m_DefaultBlend.m_Time = 0.1f;
         }
 
@@ -46,7 +48,13 @@ namespace StarterAssets
             Ray ray = Camera.main.ScreenPointToRay(screenCenter);
             if (Physics.Raycast(ray, out RaycastHit raycastHit, 999f, aimColliderLayerMask))
             {
-                MouseWorldPosition = raycastHit.point;
+                AimTargetPoint = raycastHit.point;
+                _aimTargetObject = raycastHit.transform;
+            }
+            else
+            {
+                AimTargetPoint = ray.GetPoint(1000);
+                _aimTargetObject = null;
             }
         }
     }

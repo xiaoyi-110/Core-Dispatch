@@ -30,8 +30,9 @@ namespace Gameplay.GameplayObjects.Items
         private float _fireTimer = 0f;
         private int _ammoCount = 0;public int AmmoCount { get => _ammoCount; set => _ammoCount = value; }
 
-        private void Awake()
+        protected override void Awake()
         {
+            base.Awake();
             _fireTimer += Time.realtimeSinceStartup;
         }
         //private void Update()
