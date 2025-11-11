@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Netcode;
 using UnityEngine;
 
 namespace Gameplay.GameplayObjects.Items
@@ -60,20 +61,32 @@ namespace Gameplay.GameplayObjects.Items
             }
 
             StarterAssets.Character character = collision.transform.root.GetComponent<StarterAssets.Character>();
-            if(character!=null)
+            if (NetworkManager.Singleton.IsServer)
             {
-                character.TakeDamage(_character,collision.transform,_damage);
-            }else if (defaultImpact != null)
-            {
-                if(collision.gameObject.layer!=LayerMask.NameToLayer("LocalPlayer")&& collision.gameObject.layer != LayerMask.NameToLayer("NetworkPlayer"))
+                if(character != null)
                 {
-                    Transform impact = Instantiate(defaultImpact, collision.contacts[0].point, Quaternion.FromToRotation(Vector3.up, collision.contacts[0].normal));
-                    Destroy(impact.gameObject, 30f);
+                    character.TakeDamage(_character,collision.transform,_damage);
                 }
-                
+            }
+            else
+            {
+                if (character != null)
+                {
+                    //character.TakeDamage(_character, collision.transform, _damage);
+                }
+                else if (defaultImpact != null)
+                {
+                    if (collision.gameObject.layer != LayerMask.NameToLayer("LocalPlayer") && collision.gameObject.layer != LayerMask.NameToLayer("NetworkPlayer"))
+                    {
+                        Transform impact = Instantiate(defaultImpact, collision.contacts[0].point, Quaternion.FromToRotation(Vector3.up, collision.contacts[0].normal));
+                        Destroy(impact.gameObject, 30f);
+                    }
+
+                }
             }
 
-            Destroy(gameObject);
+
+                Destroy(gameObject);
         }
     }
 }

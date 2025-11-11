@@ -1,12 +1,15 @@
 using Gameplay.GameplayObjects.Items;
 using LitJson;
+using Netcode;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEditor.Rendering;
 using UnityEngine;
 using UnityEngine.Animations.Rigging;
+using UnityEngine.Rendering.UI;
 using UnityEngine.TextCore.Text;
 using UnityEngine.Windows;
+using Utility;
 
 namespace StarterAssets
 {
@@ -26,7 +29,7 @@ namespace StarterAssets
         public Weapon CurrentWeapon { get; private set; } = null;
         private Weapon _weaponToEquip= null;
         public Ammo CurrentAmmo { get; private set; } = null; 
-        private List<Item> _items = new List<Item>();
+        private List<Item> _items = new List<Item>();public List<Item> Inventory { get=> _items; }
         private Transform _leftHandIKTarget = null;
         
         public bool IsReloading { get; private set; } = false;
@@ -57,8 +60,7 @@ namespace StarterAssets
         private Vector2 _aimedMovingAnimationInput = Vector2.zero;
         private Vector3 _aimTarget=Vector3.zero;public Vector3 AimTarget { get => _aimTarget; set => _aimTarget = value; }
         
-        private float _health = 100f;
-
+        private float _health = 100f;public float Health { get => _health; }
         private ulong _clientID = 0; public ulong ClientID { get => _clientID; set => _clientID = value; }
         private bool _isInitialized = false; public bool IsInitialized { get => _isInitialized; set => _isInitialized = value; }
         private bool _componentsInitialized = false;
@@ -69,20 +71,25 @@ namespace StarterAssets
         private bool _lastAiming = false;
         private Vector2 _lastAimedMoveSpeed=Vector2.zero ;
 
+        public static Character LocalPlayer = null;
+        private NetworkObject _networkObject=null;
+
         [System.Serializable]
         public struct Data
         {
-            public Dictionary<string, int> items;
-            public List<string> itemsId;
-            public List<string> equippedIds;
+            public float Health;
+            public Dictionary<string,(string, int)> Items;
+            public List<string> ItemsId;
+            public List<string> EquippedIds;
         }
 
         public Data GetData() {
             Data data = new Data();
 
-            data.items = new Dictionary<string, int>();
-            data.itemsId = new List<string>();
-            data.equippedIds = new List<string>();
+            data.Health = _health;
+            data.Items = new Dictionary<string,(string, int)>();
+            data.ItemsId = new List<string>();
+            data.EquippedIds = new List<string>();
 
             for (int i = 0; i < _items.Count; i++)
             {
@@ -91,23 +98,38 @@ namespace StarterAssets
                     continue;
                 }
 
-                int value = 0;
-                if (_items[i] is Weapon weapon) { 
-                value=weapon.AmmoCount;
-                }else if (_items[i] is Ammo ammo)
-                {
-                    value = ammo.Count;
-                }
-                data.items.Add(_items[i].Id,value);
-                data.itemsId.Add(_items[i].NetworkId);
+                int value = _items[i].GetCount();
 
-                if (CurrentWeapon != null && _items[i] == CurrentWeapon)
+                data.Items.Add(i.ToString(),(_items[i].Id,value));
+                data.ItemsId.Add(_items[i].NetworkId);
+
+                if(_weaponToEquip!=null)
                 {
-                    data.equippedIds.Add(_items[i].NetworkId);
-                }else if (CurrentAmmo != null && _items[i] == CurrentAmmo)
-                {
-                    data.equippedIds.Add(_items[i].NetworkId);
+                    if (_items[i] == _weaponToEquip)
+                    {
+                        data.EquippedIds.Add(_weaponToEquip.NetworkId);
+                        for (int j = 0; j < _items.Count; j++)
+                        {
+                            if (_items[i] != null && _items[i].GetType() == typeof(Ammo) && _weaponToEquip.AmmoID == _items[i].Id)
+                            {
+                                data.EquippedIds.Add(_items[i].NetworkId);
+                                break;
+                            }
+                        }
+                    }
                 }
+                else
+                {
+                    if (CurrentWeapon != null && _items[i] == CurrentWeapon)
+                    {
+                        data.EquippedIds.Add(_items[i].NetworkId);
+                    }
+                    else if (CurrentAmmo != null && _items[i] == CurrentAmmo)
+                    {
+                        data.EquippedIds.Add(_items[i].NetworkId);
+                    }
+                }
+                
 
             }
 
@@ -118,32 +140,11 @@ namespace StarterAssets
             InitializeComponents();
         }
 
-        public override void OnNetworkSpawn()
-        {
-            //_animator = GetComponent<Animator>();
-            //_ragdollColliders = GetComponentsInChildren<Collider>();
-            //_ragdollRigidbodies = GetComponentsInChildren<Rigidbody>();
-            //_tpc = GetComponent<ThirdPersonController>();
-            //_controller = GetComponent<CharacterController>();
-            //if (_ragdollColliders != null)
-            //{
-            //    for (int i = 0; i < _ragdollColliders.Length; i++)
-            //    {
-            //        _ragdollColliders[i].isTrigger = false;
-            //    }
-            //}
-            //if (_ragdollRigidbodies != null)
-            //{
-            //    for (int i = 0; i < _ragdollRigidbodies.Length; i++)
-            //    {
-            //        _ragdollRigidbodies[i].mass *= 50;
-            //    }
-            //}
-        }
 
         private void InitializeComponents()
         {
             if(_componentsInitialized) return;
+            gameObject.tag = "Character";
             _componentsInitialized = true;
             _animator = GetComponent<Animator>();
             _ragdollColliders = GetComponentsInChildren<Collider>();
@@ -168,8 +169,10 @@ namespace StarterAssets
             _playerAnimation = GetComponent<PlayerAnimation>();
             _rigManager = GetComponent<RigManager>();
             _fallTimeoutDelta = FallTimeout;
+            _networkObject = GetComponent<NetworkObject>();
+            _networkObject.DontDestroyWithOwner = false;
         }
-        public void InitializeServer(Dictionary<string, int> items,List<string> itemsId,List<string> equippedIds,ulong clientID)
+        public void InitializeServer(Dictionary<string, (string, int)> items,List<string> itemsId,List<string> equippedIds,ulong clientID)
         {
             if (_isInitialized)
             {
@@ -178,7 +181,7 @@ namespace StarterAssets
             _isInitialized = true;
             InitializeComponents();
             _clientID = clientID;
-            SetLayer(transform, LayerMask.NameToLayer("NetworkPlayer"));
+            Tools.SetLayerMask(transform, LayerMask.NameToLayer("NetworkPlayer"));
             _Initialize(items, itemsId,equippedIds);
         }
         [ClientRpc]
@@ -192,10 +195,13 @@ namespace StarterAssets
             InitializeComponents();
             _clientID= clientID;
             if (IsOwner)
-                SetLayer(transform, LayerMask.NameToLayer("LocalPlayer"));
+            {
+                Tools.SetLayerMask(transform, LayerMask.NameToLayer("LocalPlayer"));
+                LocalPlayer = this;
+            }
             else
-                SetLayer(transform, LayerMask.NameToLayer("NetworkPlayer"));
-            Dictionary<string, int> items = LitJson.JsonMapper.ToObject<Dictionary<string, int>>(itemsJson);
+                Tools.SetLayerMask(transform, LayerMask.NameToLayer("NetworkPlayer"));
+            Dictionary<string, (string, int)> items = LitJson.JsonMapper.ToObject<Dictionary<string, (string, int)>>(itemsJson);
             List<string> itemsId = LitJson.JsonMapper.ToObject<List<string>>(itemIdJson);
             List<string> equippedIds=JsonMapper.ToObject<List<string>>(equippedJson);
             List<Item.Data> itemsOnGround=JsonMapper.ToObject<List<Item.Data>>(itemsOnGroundJson);
@@ -229,13 +235,7 @@ namespace StarterAssets
                         itemsOnGroundInScene[i].NetworkId= itemsOnGround[j].NetworkId;
                         itemsOnGroundInScene[i].transform.position=new Vector3(itemsOnGround[j].Position[0],itemsOnGround[j].Position[1],itemsOnGround[j].Position[2]);
                         itemsOnGroundInScene[i].transform.eulerAngles=new Vector3(itemsOnGround[j].Rotation[0],itemsOnGround[j].Rotation[1],itemsOnGround[j].Rotation[2]);
-                        if (itemsOnGroundInScene[i] is Weapon weapon)
-                        {
-                            weapon.AmmoCount = itemsOnGround[j].Value;
-                        }else if(itemsOnGroundInScene[i] is Ammo ammo)
-                        {
-                            ammo.Count = itemsOnGround[j].Value;
-                        }
+                        itemsOnGroundInScene[i].SetCount(itemsOnGround[j].Value);
                         itemsOnGroundInScene[i].SetOnGroundStatus(true);
                         itemsOnGround.RemoveAt(j);
                         matched=true;
@@ -255,14 +255,7 @@ namespace StarterAssets
                     item.NetworkId = itemsOnGround[i].NetworkId;
                     item.Initialize();
                     item.SetOnGroundStatus(true);
-                    if (item is Weapon weapon)
-                    {
-                        weapon.AmmoCount = itemsOnGround[i].Value;
-                    }
-                    else if (item is Ammo ammo)
-                    {
-                        ammo.Count = itemsOnGround[i].Value;
-                    }
+                    item.SetCount(itemsOnGround[i].Value);
                     item.transform.position = new Vector3(itemsOnGround[i].Position[0], itemsOnGround[i].Position[1], itemsOnGround[i].Position[2]);
                     item.transform.eulerAngles = new Vector3(itemsOnGround[i].Rotation[0], itemsOnGround[i].Rotation[1], itemsOnGround[i].Rotation[2]);
                 }
@@ -280,15 +273,24 @@ namespace StarterAssets
             InitializeComponents();
             _clientID = clientID;
             if (IsOwner)
-                SetLayer(transform, LayerMask.NameToLayer("LocalPlayer"));
+            {
+                Tools.SetLayerMask(transform, LayerMask.NameToLayer("LocalPlayer"));
+                LocalPlayer = this;
+            }
             else
-                SetLayer(transform, LayerMask.NameToLayer("NetworkPlayer"));
+                Tools.SetLayerMask(transform, LayerMask.NameToLayer("NetworkPlayer"));
             Data data=JsonMapper.ToObject<Data>(dataJson);
-            _Initialize(data.items,data.itemsId, data.equippedIds);            
+            _health = data.Health;
+            _Initialize(data.Items,data.ItemsId, data.EquippedIds);
+            if (_health <= 0)
+            {
+                HealthCheck();
+            }
         }
 
         private void Update()
         {
+            if (_health <= 0) return;
             GroundedCheck();
             FreeFall();
 
@@ -456,7 +458,7 @@ namespace StarterAssets
         }
 
 
-        private void _Initialize(Dictionary<string, int> items,List<string> itemsId,List<string> equippedIds)
+        private void _Initialize(Dictionary<string,(string, int)> items,List<string> itemsId,List<string> equippedIds)
         {
             InitializeComponents();
             if (items != null)
@@ -466,18 +468,17 @@ namespace StarterAssets
                 int equippedAmmoIndex = -1;
                 foreach (var itemEntry in items) 
                 {
-                    string itemID = itemEntry.Key;
-                    int count = itemEntry.Value;
+                    string itemID = itemEntry.Value.Item1;
+                    int count = itemEntry.Value.Item2;
 
                     if (count > 0)
                     {
-                        Item prefab = PrefabManager.Instance.GetItemPrefab(itemID);
-                        if (prefab == null) continue;
-
-                        Item newItem = PrefabManager.Instance.GetItemInstance(itemID);
+                        Item newItem = PrefabManager.Instance.GetItemInstance(itemID,transform);
+                        if(newItem==null)continue;
                         newItem.Initialize();
                         newItem.SetOnGroundStatus(false);
                         newItem.NetworkId = itemsId[i];
+                        newItem.SetCount(count);
                         if (newItem != null)
                             {
                                 if (newItem is Weapon newWeapon)
@@ -485,7 +486,6 @@ namespace StarterAssets
                                     newItem.transform.SetParent(weaponHolder);
                                     newItem.transform.localPosition = newWeapon.RightHandPosition;
                                     newItem.transform.localEulerAngles = newWeapon.RightHandRotation;
-                                newWeapon.AmmoCount = count;
                                 if (equippedIds.Contains(newItem.NetworkId)||equippedWeaponIndex<0)
                                     {
                                         equippedWeaponIndex =i;
@@ -493,7 +493,6 @@ namespace StarterAssets
                                 }
                                 else if (newItem is Ammo newAmmo)
                                 {
-                                    newAmmo.Count = count;
                                 if (equippedIds.Contains(newItem.NetworkId))
                                 {
                                     equippedAmmoIndex = i;
@@ -505,15 +504,30 @@ namespace StarterAssets
                             }
                     }
                 }
-                if (equippedWeaponIndex >= 0 && CurrentWeapon == null)
+                if (_health > 0)
                 {
-                    _weaponToEquip=(Weapon)_items[equippedWeaponIndex];
-                    OnEquip();
+                    if (equippedWeaponIndex >= 0 && CurrentWeapon == null)
+                    {
+                        _weaponToEquip = (Weapon)_items[equippedWeaponIndex];
+                        OnEquip();
+                    }
+                    if (equippedAmmoIndex >= 0)
+                    {
+                        _EquipAmmo((Ammo)_items[equippedAmmoIndex]);
+                    }
+
+                    if (CurrentAmmo != null && CurrentAmmo.Count > 0 && CurrentWeapon.AmmoCount < CurrentWeapon.ClipSize)
+                    {
+                        int count = CurrentWeapon.ClipSize - CurrentWeapon.AmmoCount;
+                        if (CurrentAmmo.Count < count)
+                        {
+                            count = CurrentAmmo.Count;
+                        }
+                        CurrentAmmo.Count -= count;
+                        CurrentWeapon.AmmoCount += count;
+                    }
                 }
-                if (equippedAmmoIndex >= 0)
-                {
-                    _EquipAmmo((Ammo)_items[equippedAmmoIndex]);
-                }
+                
             }
         }
 
@@ -763,24 +777,66 @@ namespace StarterAssets
 
             }
         }
-        public void TakeDamage(Character character, Transform hit, float damage)
+        public void TakeDamage(Character shooter, Transform hit, float damage)
         {
-            if (_health > 0)
+            if (_health > 0&&damage>0)
             {
+                if (hit == _animator.GetBoneTransform(HumanBodyBones.Head))
+                {
+                    damage *= 3f;
+                }
                 _health -= damage;
                 if (_health <= 0)
                 {
-                    _health = 0;
-                    SetRagdollStatus(true);
-                    Destroy(_rigManager);
-                    Destroy(GetComponent<RigBuilder>());
-                    Destroy(_playerAnimation);                    
-                    Destroy(_tpc);
-                    Destroy(_controller);
-                    Destroy(this);
+                    _networkObject.DontDestroyWithOwner = true;
+                }
+                HealthCheck();
+                TakeDamageClientRpc(shooter.ClientID, ClientID, damage, _health);
+            }
+        }
+
+        [ClientRpc]
+        private void TakeDamageClientRpc(ulong shooter,ulong target,float damage,float remainedHealth)
+        {
+            _health = remainedHealth;
+            HealthCheck();
+        }
+        private void HealthCheck()
+        {
+            if (_health <= 0)
+            {
+                _health = 0;
+                if (_animator != null) _animator.enabled = false;
+                if (GetComponent<RigBuilder>() != null) GetComponent<RigBuilder>().enabled = false;
+                if (_tpc != null) _tpc.enabled = false;
+                if (_controller != null) _controller.enabled = false;
+                SetRagdollStatus(true);
+                Destroy(_rigManager);
+                Destroy(GetComponent<RigBuilder>());
+                Destroy(_animator);
+                Destroy(_tpc);
+                Destroy(_controller);
+                //Destroy(this);
+                if(CurrentWeapon != null)
+                {
+                    _items.Remove(CurrentWeapon);
+                    CurrentWeapon.transform.SetParent(null,true);
+                    CurrentWeapon.SetOnGroundStatus(true);
+                }
+
+                ClientNetworkTransform networkTransform=GetComponent<ClientNetworkTransform>();
+                if (networkTransform != null)
+                {
+                    networkTransform.SyncPositionX = false;
+                    networkTransform.SyncPositionY = false;
+                    networkTransform.SyncPositionZ = false;
+                    networkTransform.SyncRotAngleX = false;
+                    networkTransform.SyncRotAngleY = false;
+                    networkTransform.SyncRotAngleZ = false;
                 }
             }
         }
+
 
         public void Reload()
         {
@@ -853,14 +909,6 @@ namespace StarterAssets
             IsSwitchingWeapon = false;
         }
 
-        private void SetLayer(Transform root,int layer)
-        {
-            var children=root.GetComponentsInChildren<Transform>(true);
-            foreach(var child in children)
-            {
-                child.gameObject.layer = layer;
-            }
-        }
 
         private void GroundedCheck()
         {
@@ -991,13 +1039,26 @@ namespace StarterAssets
         {
             bool success = false;
             Item[] items = FindObjectsByType<Item>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            Item merge=null;
+
             if (items != null)
             {
                 for(int i=0; i<items.Length; i++)
                 {
                     if (items[i].transform.parent == null && items[i].NetworkId == networkId)
                     {
-                        AddItemToInventory(items[i]);
+                        if (items[i].GetType() == typeof(Ammo))
+                        {
+                            for(int j=0;j<_items.Count;j++)
+                            {
+                                if (_items[j].Id == items[i].Id)
+                                {
+                                    merge=_items[j];
+                                    break;
+                                }
+                            }
+                        }
+                        AddItemToInventoryLocally(items[i],merge);
                         success = true;
                         break;
                     }
@@ -1005,7 +1066,7 @@ namespace StarterAssets
             }
             if (success)
             {
-                PickupItemClientRpc(networkId, true);
+                PickupItemClientRpc(networkId, true, merge !=null?merge.NetworkId:"");
             }
             else
             {
@@ -1013,11 +1074,11 @@ namespace StarterAssets
                 target[0] = serverRpcParams.Receive.SenderClientId;
                 ClientRpcParams clientRpcParams = default;
                 clientRpcParams.Send.TargetClientIds = target;
-                PickupItemClientRpc(networkId,false, clientRpcParams);
+                PickupItemClientRpc(networkId,false,"", clientRpcParams);
             }
         }
         [ClientRpc]
-        private void PickupItemClientRpc(string networkId,bool success,ClientRpcParams clientRpcParams = default)
+        private void PickupItemClientRpc(string networkId,bool success,string mergeNetworkId,ClientRpcParams clientRpcParams = default)
         {
             if (success)
             {
@@ -1029,8 +1090,20 @@ namespace StarterAssets
                     {
                         if (items[i].transform.parent == null && items[i].NetworkId == networkId)
                         {
-                            AddItemToInventory(items[i]);
                             founded = true;
+                            Item merge = null;
+                            if (!string.IsNullOrEmpty(mergeNetworkId))
+                            {
+                                for(int j=0;j<_items.Count;j++)
+                                {
+                                    if (_items[j].NetworkId == mergeNetworkId)
+                                    {
+                                        merge = _items[j];
+                                        break;
+                                    }
+                                }
+                            }
+                            AddItemToInventoryLocally(items[i],merge);
                             break;
                         }
                     }
@@ -1042,23 +1115,210 @@ namespace StarterAssets
             }
             _isPickingItem=false;
         }
-        public void AddItemToInventory(Item item)
+        public void AddItemToInventoryLocally(Item item,Item merge=null)
         {
-            item.transform.SetParent(transform);
-            item.Initialize();  
-            item.SetOnGroundStatus(false);
-
-            if(item is Weapon weapon)
+            if(item==null||_items.Contains(item))return;
+            if (merge != null && _items.Contains(merge))
             {
-                item.transform.SetParent(weaponHolder);
-                item.transform.localPosition = weapon.RightHandPosition;
-                item.transform.localEulerAngles = weapon.RightHandRotation;
-            }else if(item is Ammo ammo)
-            {
+                if(merge.GetType() ==item.GetType())
+                {
+                    merge.AddAmount(item.GetCount());
+                    Destroy(item.gameObject);
+                }
+                else
+                {
 
+                }
             }
-            item.gameObject.SetActive(false);
-            _items.Add(item);
+            else
+            {
+                item.transform.SetParent(transform);
+                item.Initialize();
+                item.SetOnGroundStatus(false);
+
+                if (item is Weapon weapon)
+                {
+                    item.transform.SetParent(weaponHolder);
+                    item.transform.localPosition = weapon.RightHandPosition;
+                    item.transform.localEulerAngles = weapon.RightHandRotation;
+                }
+                else if (item is Ammo ammo)
+                {
+                    if (CurrentAmmo == null && CurrentWeapon != null && CurrentWeapon.AmmoID == ammo.Id)
+                    {
+                        _EquipAmmo(ammo);
+                    }
+                }
+                item.gameObject.SetActive(false);
+                _items.Add(item);
+            }        
+        }
+
+        public void RemoveItemFromInventoryLocally(Item item)
+        {
+            if (item == null || !_items.Contains(item))
+            {
+                return;
+            }
+            if (item == CurrentWeapon)
+            {
+                CurrentWeapon=null;
+            }
+            if (item == CurrentAmmo)
+            {
+                CurrentAmmo=null;
+            }
+            _items.Remove(item);
+        }
+        public void DropItem(Item item,int count)
+        {
+            if (item != null)
+            {
+                Dictionary<Item,int> items=new Dictionary<Item, int>();
+                items.Add(item, count);
+                DropItems(items);
+            }
+        }
+
+        public void DropItems(Dictionary<Item,int> items)
+        {
+            Dictionary<string, int> serializeableItems = new Dictionary<string, int>();
+            foreach(var item in items)
+            {
+                if (item.Value <= 0 && item.Value.GetType() == typeof(Ammo))
+                {
+                    continue;
+                }
+                if (item.Key != null && _items.Contains(item.Key))
+                {
+                    serializeableItems.Add(item.Key.NetworkId, item.Value);
+                }
+            }
+            if(serializeableItems.Count > 0)
+            {
+                string itemsJson=JsonMapper.ToJson(serializeableItems);
+                DropItemsServerRpc(itemsJson);
+            }
+        }
+        [ServerRpc]
+        private void DropItemsServerRpc(string itemsJson, ServerRpcParams serverRpcParams = default)
+        {
+            Dictionary<string, int> items = JsonMapper.ToObject<Dictionary<string, int>>(itemsJson);
+            Dictionary<string, int> droppedItems = new Dictionary<string, int>();
+            Dictionary<string, (string, int)> splitItems = new Dictionary<string, (string, int)>();
+            foreach (var item in items)
+            {
+                for (int i = 0; i < _items.Count; i++)
+                {
+                    if (item.Key == _items[i].NetworkId)
+                    {
+                        int count = item.Value;
+                        int remained = 0;
+                        int c = 0;
+                        if (_items[i].GetType() == typeof(Weapon))
+                        {
+                            count = ((Weapon)_items[i]).AmmoCount;
+                        }
+                        else
+                        {
+                            c = _items[i].GetCount();
+                            if (count <= 0)
+                            {
+                                break;
+                            }
+                            else if (c < count)
+                            {
+                                count = c;
+                            }
+                            else if (c > count)
+                            {
+                                remained = c - count;
+                                c = count;
+                                _items[i].SetCount(c);
+                            }
+                        }
+                        if (remained > 0)
+                        {
+                            Item prefab = PrefabManager.Instance.GetItemPrefab(_items[i].Id);
+                            if (prefab != null)
+                            {
+                                Item splitItem = Instantiate(prefab, transform);
+                                splitItem.NetworkId = System.Guid.NewGuid().ToString();
+                                splitItem.SetCount(remained);
+                                AddItemToInventoryLocally(splitItem);
+                                splitItems.Add(splitItem.NetworkId, (_items[i].Id, remained));
+                            }
+                            else
+                            {
+                                break;
+                            }
+                        }
+                        _DropItem(_items[i]);
+                        droppedItems.Add(item.Key, count);
+                        break;
+                    }
+                }
+            }
+            if (droppedItems.Count > 0)
+            {
+                string droppedItemsJson = JsonMapper.ToJson(droppedItems);
+                string splitItemsJson = JsonMapper.ToJson(splitItems);
+                DropItemsClientRpc(droppedItemsJson, splitItemsJson);
+            }
+        }
+        [ClientRpc]
+        private void DropItemsClientRpc(string droppedItemsJson,string splitItemsJson,ClientRpcParams clientRpcParams = default)
+        {
+            Dictionary<string,int> items=JsonMapper.ToObject<Dictionary<string,int>>(droppedItemsJson);
+            Dictionary<string,(string,int)> splitItems=JsonMapper.ToObject<Dictionary<string,(string,int)>>(splitItemsJson);
+            foreach(var item in items)
+            {
+                bool found=false;
+                for(int i=0; i<_items.Count; i++)
+                {
+                    if (_items[i].NetworkId == item.Key)
+                    {
+                        _items[i].SetCount(item.Value);
+                        _DropItem(_items[i]);
+                        found=true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+
+                }
+            }
+            foreach(var item in splitItems)
+            {
+                Item splitItem = PrefabManager.Instance.GetItemInstance(item.Value.Item1,transform);
+                splitItem.NetworkId = item.Key;
+                splitItem.SetCount(item.Value.Item2);
+                AddItemToInventoryLocally(splitItem);
+            }
+        }
+
+        private void _DropItem(Item item)
+        {
+            if (!_items.Contains(item))
+            {
+                return;
+            }
+            if (item==CurrentWeapon)
+            {
+                CurrentWeapon = null;
+            }
+            if (item == CurrentAmmo)
+            {
+                CurrentAmmo = null;
+            }
+            item.transform.SetParent(null);
+            item.SetOnGroundStatus(true);
+            Vector3 offset = new Vector3(Random.Range(-0.1f, 0.1f), 0, Random.Range(-0.1f, 0.1f));
+            item.transform.position=transform.position+transform.forward.normalized+Vector3.up+offset;
+            item.transform.rotation=Quaternion.identity;
+            item.gameObject.SetActive(true);
+            _items.Remove(item);
         }
         private void OnFootstep(AnimationEvent animationEvent)
         {

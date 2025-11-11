@@ -175,6 +175,7 @@ namespace StarterAssets
             HandleSprint();
             JumpAndGravity();
             HandleHoslterWeapon();
+            ShowInventoryUI();
             ShowPickupUI();
             Move();
         }
@@ -188,14 +189,20 @@ namespace StarterAssets
 
         private void CameraRotation()
         {
+            Vector2 lookInput = _input.look;
+            if (UIManager.Instance.IsInventoryOpen)
+            {
+                lookInput=Vector2.zero;
+            }
+
             // if there is an input and camera position is not fixed
-            if (_input.look.sqrMagnitude >= _threshold && !LockCameraPosition)
+            if (lookInput.sqrMagnitude >= _threshold && !LockCameraPosition)
             {
                 //Don't multiply mouse input by Time.deltaTime;
                 float deltaTimeMultiplier = IsCurrentDeviceMouse ? 1.0f : Time.deltaTime;
 
-                _cinemachineTargetYaw += _input.look.x * deltaTimeMultiplier*Sensitivity;
-                _cinemachineTargetPitch += _input.look.y * deltaTimeMultiplier*Sensitivity;
+                _cinemachineTargetYaw += lookInput.x * deltaTimeMultiplier*Sensitivity;
+                _cinemachineTargetPitch += lookInput.y * deltaTimeMultiplier*Sensitivity;
             }
 
             // clamp our rotations so our values are limited 360 degrees
@@ -303,31 +310,56 @@ namespace StarterAssets
                 }
             }
         }
-
+        private void ShowInventoryUI()
+        {
+            if (_input.inventory)
+            {
+                UIManager.Instance.OpenInventory();
+                _input.inventory=false;
+            }
+        }
         private void ShowPickupUI()
         {
             float maxPickupDistance = 3f;
             Item itemToPick=null;
-
-            if (CameraManager.Instance.AimTargetObject != null && CameraManager.Instance.AimTargetObject.tag == "Item" && Vector3.Distance(CameraManager.Instance.AimTargetObject.position, transform.position) <= maxPickupDistance)
+            Character characterToLoot = null;
+            if (!UIManager.Instance.IsInventoryOpen&& CameraManager.Instance.AimTargetObject != null)
             {
-                itemToPick=CameraManager.Instance.AimTargetObject.GetComponent<Item>();
-                if (!itemToPick.CanBePickUp)
+                if (CameraManager.Instance.AimTargetObject.tag == "Item" && Vector3.Distance(CameraManager.Instance.AimTargetObject.position, transform.position) <= maxPickupDistance)
                 {
-                    itemToPick = null;
+                    itemToPick = CameraManager.Instance.AimTargetObject.GetComponent<Item>();
+                    if (itemToPick!=null&&!itemToPick.CanBePickUp)
+                    {
+                        itemToPick = null;
+                    }
+                }else
+                if (CameraManager.Instance.AimTargetObject.root.tag == "Character" && Vector3.Distance(CameraManager.Instance.AimTargetObject.position, transform.position) <= maxPickupDistance)
+                {
+                    characterToLoot = CameraManager.Instance.AimTargetObject.root.GetComponent<Character>();
+                    if (characterToLoot != null && characterToLoot.Health > 0)
+                    {
+                        characterToLoot = null;
+                    }
                 }
             }
-            if (UIManager.Instance.ItemToPick != itemToPick)
+
+            if (UIManager.Instance.ItemToPick != itemToPick&&UIManager.Instance.CharacterToLoot==null)
             {
                 UIManager.Instance.ItemToPick = itemToPick;
+            }else if (UIManager.Instance.ItemToPick == null && UIManager.Instance.CharacterToLoot != characterToLoot)
+            {
+                UIManager.Instance.CharacterToLoot = characterToLoot;
             }
             if (_input.pickupItem)
             {
-                if(UIManager.Instance.ItemToPick != null)
+                if (UIManager.Instance.ItemToPick != null)
                 {
                     _character.PickupItem(UIManager.Instance.ItemToPick.NetworkId);
+                }else if (UIManager.Instance.CharacterToLoot != null)
+                {
+                    UIManager.Instance.OpenInventoryForLoot(UIManager.Instance.CharacterToLoot);
                 }
-                _input.pickupItem = false;
+                    _input.pickupItem = false;
             }
         }
         private void Move()
@@ -469,20 +501,6 @@ namespace StarterAssets
             if (lfAngle > 360f) lfAngle -= 360f;
             return Mathf.Clamp(lfAngle, lfMin, lfMax);
         }
-
-        //private void OnDrawGizmosSelected()
-        //{
-        //    Color transparentGreen = new Color(0.0f, 1.0f, 0.0f, 0.35f);
-        //    Color transparentRed = new Color(1.0f, 0.0f, 0.0f, 0.35f);
-
-        //    if (Grounded) Gizmos.color = transparentGreen;
-        //    else Gizmos.color = transparentRed;
-
-        //    // when selected, draw a gizmo in the position of, and matching radius of, the grounded collider
-        //    Gizmos.DrawSphere(
-        //        new Vector3(transform.position.x, transform.position.y - GroundedOffset, transform.position.z),
-        //        GroundedRadius);
-        //}
 
         //private void OnFootstep(AnimationEvent animationEvent)
         //{

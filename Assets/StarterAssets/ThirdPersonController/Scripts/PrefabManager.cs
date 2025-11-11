@@ -42,12 +42,12 @@ namespace StarterAssets
             }
             return null;
         }
-        public Item GetItemInstance(string itemID)
+        public Item GetItemInstance(string itemID, Transform parent = null)
         {
             Item itemPrefab=GetItemPrefab(itemID);
-            if(itemPrefab!=null)
+            if (itemPrefab != null)
             {
-                return Instantiate(itemPrefab);
+                return Instantiate(itemPrefab, parent);
             }
             return null;
         }
