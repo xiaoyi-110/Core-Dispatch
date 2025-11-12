@@ -15,7 +15,7 @@ public abstract class MonoSingleton<T> : MonoBehaviour where T : MonoSingleton<T
         }
 
         Instance = this as T;
-        DontDestroyOnLoad(gameObject.transform.root.gameObject);
+        //DontDestroyOnLoad(gameObject.transform.root.gameObject);
     }
 
     protected virtual void OnDestroy()

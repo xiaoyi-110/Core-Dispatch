@@ -11,9 +11,6 @@ namespace Managers
 {
     public class UIManager : MonoSingleton<UIManager>
     {
-        [SerializeField] private Button serverButton = null;
-        [SerializeField] private Button clientButton = null;
-
         [Header("Pickup-Box")]
         public GameObject ItemPickupPanel = null;
         public RectTransform ItemPickupBox = null;
@@ -37,6 +34,8 @@ namespace Managers
         public TextMeshProUGUI InventoryGridTitle1=null;
         public TextMeshProUGUI InventoryGridTitle2 =null;
         public Button CloseButton=null;
+
+        public Text Debug=null;
         private Item _itemToPick=null;public Item ItemToPick { get => _itemToPick; set { _itemToPick = value; OnItemToPickUpdated(); } }
         private Character _characterToLoot = null;public Character CharacterToLoot { get => _characterToLoot; set { _characterToLoot = value;OnCharacterToLootUpdated(); } }
         private Character _characterLootTarget = null;
@@ -57,8 +56,6 @@ namespace Managers
         }
         private void Start()
         {
-            serverButton.onClick.AddListener(StartServer);
-            clientButton.onClick.AddListener(StartClient);
             CloseButton.onClick.AddListener(CloseInventory);
 
             ItemPickupBox.anchorMax=Vector2.zero;
@@ -95,19 +92,15 @@ namespace Managers
             ItemLootBox.anchoredPosition=GetClampedScreenPosition(_characterToLoot.transform.position);
         }
 
-        private void StartServer()
-        {
-            serverButton.gameObject.SetActive(false);
-            clientButton.gameObject.SetActive(false);
-            SessionManager.Instance.StartServer();
-        }
+        //private void StartServer()
+        //{
+        //    SessionManager.Instance.StartServer();
+        //}
 
-        private void StartClient()
-        {
-            serverButton.gameObject.SetActive(false);
-            clientButton.gameObject.SetActive(false);
-            SessionManager.Instance.StartClient();
-        }
+        //private void StartClient()
+        //{
+        //    SessionManager.Instance.StartClient();
+        //}
 
         private void OnCharacterToLootUpdated()
         {
@@ -202,6 +195,10 @@ namespace Managers
                 InventoryGridTitle2.text = "On Ground";
                 for (int i = 0; i < Character.LocalPlayer.Inventory.Count; i++)
                 {
+                    if (Character.LocalPlayer.Inventory[i].GetType() != typeof(Weapon) && Character.LocalPlayer.Inventory[i].GetCount() <= 0)
+                    {
+                        continue;
+                    }
                     InventoryItem item = Instantiate(InventoryItemPrefab, InventoryGrid1);
                     item.Initialize(Character.LocalPlayer.Inventory[i]);
                     _inventoryItems1.Add(item);
@@ -228,6 +225,10 @@ namespace Managers
 
                 for (int i = 0; i < Character.LocalPlayer.Inventory.Count; i++)
                 {
+                    if (Character.LocalPlayer.Inventory[i].GetType() != typeof(Weapon) && Character.LocalPlayer.Inventory[i].GetCount() <= 0)
+                    {
+                        continue;
+                    }
                     InventoryItem item = Instantiate(InventoryItemPrefab, InventoryGrid1);
                     item.Initialize(Character.LocalPlayer.Inventory[i]);
                     _inventoryItems1.Add(item);
@@ -235,6 +236,10 @@ namespace Managers
 
                 for (int i = 0; i < _characterLootTarget.Inventory.Count; i++)
                 {
+                    if (_characterLootTarget.Inventory[i].GetType() != typeof(Weapon) && _characterLootTarget.Inventory[i].GetCount() <= 0)
+                    {
+                        continue;
+                    }
                     InventoryItem item = Instantiate(InventoryItemPrefab, InventoryGrid2);
                     item.Initialize(_characterLootTarget.Inventory[i]);
                     _inventoryItems2.Add(item);

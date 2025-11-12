@@ -125,7 +125,7 @@ namespace Gameplay.GameplayObjects.Items
             else if (GetType() == typeof(Weapon)) { ((Weapon)this).AmmoCount = value; }
         }
 
-        public void AddAmount(int value)
+        public void AddCount(int value)
         {
             SetCount(GetCount() + value);
         }

@@ -105,9 +105,9 @@ namespace StarterAssets
         private PlayerAnimation _playerAnimation;
         private Character _character;
         private CameraManager _cameraManager;
-        private RigManager _rigManager;
 
         private bool _rotateOnMove = true;
+        private bool _intialized = false;
 
         private const float _threshold = 0.01f;
         //private Vector2 _aimedMovingAnimationInput=Vector2.zero;
@@ -133,41 +133,24 @@ namespace StarterAssets
             _character = GetComponent<Character>();
             _playerInput = GetComponent<PlayerInput>();
             _cameraManager = FindObjectOfType<CameraManager>();
-            _rigManager = GetComponent<RigManager>();
         }
 
         private void Start()
         {           
-            //_controller = GetComponent<CharacterController>();
-            //_input = GetComponent<StarterAssetsInputs>();
-            //_playerAnimation = GetComponent<PlayerAnimation>();
-            //_shooterController = GetComponent<PlayerShooterController>();
-            //_character= GetComponent<Character>();
-            //_playerInput = GetComponent<PlayerInput>();
-            //_cameraManager = FindObjectOfType<CameraManager>();
 
-            if (!_character.IsOwner)
-            {
-                Destroy(this);
-                Destroy(_playerInput);
-                Destroy(_input);
-                Destroy(_controller);
-                return;
-            }
-            _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
-            _mainCamera = _cameraManager.MainCamera.gameObject;
-            _cameraManager.PlayerVirtualCamera.Follow = CinemachineCameraTarget.transform;
-            _cameraManager.AimVirtualCamera.Follow = CinemachineCameraTarget.transform;
+        }
 
-
-
-            // reset our timeouts on start
-            _jumpTimeoutDelta = JumpTimeout;
-            //_fallTimeoutDelta = FallTimeout;
+        private void DestroyControllers()
+        {
+            Destroy(this);
+            Destroy(_playerInput);
+            Destroy(_input);
+            Destroy(_controller);
         }
 
         private void Update()
         {
+            CheckInitialize();
             HandleAim();
             HandleShooting();
             HandleReload();
@@ -182,11 +165,37 @@ namespace StarterAssets
 
         private void LateUpdate()
         {
+            if (!_intialized)
+            {
+                return;
+            }
             CameraRotation();
         }
 
 
-
+        private void CheckInitialize()
+        {
+            if (!_intialized)
+            {
+                if (_character.IsOwner)
+                {
+                    _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
+                    _mainCamera = _cameraManager.MainCamera.gameObject;
+                    _cameraManager.PlayerVirtualCamera.Follow = CinemachineCameraTarget.transform;
+                    _cameraManager.AimVirtualCamera.Follow = CinemachineCameraTarget.transform;
+                    _jumpTimeoutDelta = JumpTimeout;
+                    _intialized = true;
+                }
+                else
+                {
+                    if (_character.ClientID > 0)
+                    {
+                        DestroyControllers();
+                    }
+                    return;
+                }
+            }
+        }
         private void CameraRotation()
         {
             Vector2 lookInput = _input.look;
@@ -314,7 +323,14 @@ namespace StarterAssets
         {
             if (_input.inventory)
             {
-                UIManager.Instance.OpenInventory();
+                if (UIManager.Instance.IsInventoryOpen)
+                {
+                    UIManager.Instance.CloseInventory();
+                }
+                else
+                {
+                    UIManager.Instance.OpenInventory();
+                } 
                 _input.inventory=false;
             }
         }

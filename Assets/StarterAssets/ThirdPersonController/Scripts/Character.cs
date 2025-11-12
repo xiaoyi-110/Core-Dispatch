@@ -1122,7 +1122,7 @@ namespace StarterAssets
             {
                 if(merge.GetType() ==item.GetType())
                 {
-                    merge.AddAmount(item.GetCount());
+                    merge.AddCount(item.GetCount());
                     Destroy(item.gameObject);
                 }
                 else
