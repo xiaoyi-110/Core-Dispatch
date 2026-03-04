@@ -1,4 +1,4 @@
-using Gameplay.GameplayObjects.Items;
+Ôªøusing Gameplay.GameplayObjects.Items;
 using LitJson;
 using Netcode;
 using System.Collections.Generic;
@@ -13,7 +13,7 @@ using Utility;
 
 namespace StarterAssets
 {
-    public class Character : NetworkBehaviour
+    public partial class Character : NetworkBehaviour
     {
         [SerializeField] private string id = "";public string Id { get => id; }
         [SerializeField] private Transform weaponHolder = null;
@@ -379,70 +379,7 @@ namespace StarterAssets
                 }
             }
         }
-        [ServerRpc]
-        public void OnAimTargetChangedServerRpc(Vector3 value)
-        {
-            _aimTarget = value;
-            OnAimTargetChangedClientRpc(value);
-        }
-
-        [ClientRpc]
-        public void OnAimTargetChangedClientRpc(Vector3 value)
-        {
-            if (!IsOwner)
-            {
-                _aimTarget = value;
-            }
-        }
-        [ServerRpc]
-        public void OnAimingMoveChangedServerRpc(Vector2 value)
-        {
-            _aimedMoveSpeed = value;
-            OnAimingMoveChangedClientRpc(value);
-        }
-
-        [ClientRpc]
-        public void OnAimingMoveChangedClientRpc(Vector2 value)
-        {
-            if (!IsOwner)
-            {
-                _aimedMoveSpeed = value;
-            }
-        }
-
-        [ServerRpc]
-        public void OnAimingChangedServerRpc(bool value)
-        {
-            _isAiming = value;
-            OnAimingChangedClientRpc(value);
-        }
-
-        [ClientRpc]
-        public void OnAimingChangedClientRpc(bool value)
-        {
-            if (!IsOwner)
-            {
-                _isAiming = value;
-            }
-        }
-
-        [ServerRpc]
-        public void OnMoveSpeedChangedServerRpc(float value)
-        {
-            _moveSpeed=value;
-            OnMoveSpeedChangedClientRpc(value);
-        }
-
-        [ClientRpc]
-        public void OnMoveSpeedChangedClientRpc(float value)
-        {
-            if (!IsOwner)
-            {
-                _moveSpeed = value;
-            }
-        }
-
-        private void LateUpdate()
+private void LateUpdate()
         {
             _lastPositon = transform.position;
         }
@@ -836,59 +773,7 @@ namespace StarterAssets
                 }
             }
         }
-
-
-        public void Reload()
-        {
-            if (CurrentWeapon != null&& CurrentWeapon.AmmoCount < CurrentWeapon.ClipSize && CurrentAmmo != null && CurrentAmmo.Count > 0)
-            {
-                if (IsOwner)
-                {
-                    ReloadServerRpc(CurrentWeapon.NetworkId, CurrentAmmo.NetworkId);
-                }
-                IsReloading = true;
-                //_playerAnimation.SetAimLayerWeight(1f);
-                _playerAnimation.TriggerReload();
-                Debug.Log("Reloading...");
-            }
-        }
-        [ServerRpc]
-        public void ReloadServerRpc(string weaponId, string ammoId)
-        {
-            ReloadSync(weaponId, ammoId);
-            ReloadClientRpc(weaponId, ammoId); 
-        }
-        [ClientRpc]
-        public void ReloadClientRpc(string weaponId, string ammoId)
-        {
-            if(!IsOwner)
-                ReloadSync(weaponId, ammoId);
-        }
-        private void ReloadSync(string weaponId,string ammoId)
-        {
-            if (CurrentWeapon != null && CurrentAmmo != null && CurrentAmmo.NetworkId == ammoId && CurrentWeapon.NetworkId == weaponId)
-            {
-                Reload();
-            }
-            else
-            {
-
-            }
-        }
-        public void ReloadFinished()
-        {
-            if (CurrentWeapon != null && CurrentWeapon.AmmoCount < CurrentWeapon.ClipSize && CurrentAmmo != null && CurrentAmmo.Count > 0)
-            {
-                int count= Mathf.Min(CurrentWeapon.ClipSize - CurrentWeapon.AmmoCount, CurrentAmmo.Count);
-                CurrentAmmo.Count -= count;
-                CurrentWeapon.AmmoCount += count;
-                IsReloading=false;
-                _playerAnimation.SetAimLayerWeight(0f);
-                Debug.Log("Reload Finished.");
-            }
-        }
-
-        public void OnEquip() { 
+public void OnEquip() { 
             _EquipWeapon();
         }
 
@@ -917,7 +802,7 @@ namespace StarterAssets
                 transform.position.z);
             bool isCurrentlyGrounded = Physics.CheckSphere(spherePosition, GroundedRadius, GroundLayers,QueryTriggerInteraction.Ignore);
 
-            if (IsOwner) // ÷ª”–”µ”–’ﬂ£®Owner£©”–»®œﬁ∏¸–¬Õ¯¬Á◊¥Ã¨
+            if (IsOwner) // Âè™ÊúâÊã•ÊúâËÄÖÔºàOwnerÔºâÊúâÊùÉÈôêÊõ¥Êñ∞ÁΩëÁªúÁä∂ÊÄÅ
             {
                 if (_isGroundedNet.Value != isCurrentlyGrounded)
                 {
@@ -957,77 +842,7 @@ namespace StarterAssets
             }
 
         }
-
-        public void Jump()
-        {
-            //_playerAnimation.SetJump(true);
-            _animator.SetTrigger("Jump");
-            JumpServerRpc();
-        }
-
-        [ServerRpc]
-        public void JumpServerRpc()
-        {
-            //_playerAnimation.SetJump(true);
-            _animator.SetTrigger("Jump");
-            JumpClientRpc();
-        }
-
-        [ClientRpc]
-        public void JumpClientRpc()
-        {
-            if(!IsOwner)
-                // _playerAnimation.SetJump(true);
-                _animator.SetTrigger("Jump");
-        }
-
-        private List<string> _shots=new List<string>();
-        public bool Shoot()
-        {
-            if (CurrentWeapon!=null&& IsAiming && !IsReloading && CurrentWeapon.Shoot(this, _aimTarget))
-            {
-                if (IsOwner)
-                {
-                    ShootServerRpc(CurrentWeapon.NetworkId);
-                }
-                _rigManager.ApplyWeaponKick(CurrentWeapon.HandKick, CurrentWeapon.BodyKick);
-                _playerAnimation.TriggerShoot();
-                Debug.Log("Shoot");
-                return true;
-            }
-            return false;
-        }
-        [ServerRpc]
-        public void ShootServerRpc(string weaponId)
-        {
-            ShootSync(weaponId);
-            ShootClientRpc(weaponId);
-        }
-        [ClientRpc]
-        public void ShootClientRpc(string weaponId)
-        {
-            if (!IsOwner)
-            {
-                ShootSync(weaponId);
-            }
-        }
-        public void ShootSync(string weaponId)
-        {
-            if (CurrentWeapon != null && CurrentWeapon.NetworkId == weaponId)
-            {
-                Debug.Log("Sync Shoot");
-                bool shoot=Shoot();
-                if (!shoot)
-                {
-                    _shots.Add(weaponId);
-                }
-            }
-            else
-            {
-
-            }
-        }
-        private bool _isPickingItem = false;
+private bool _isPickingItem = false;
         public void PickupItem(string networkId)
         {
             if (_isPickingItem) return;
@@ -1341,4 +1156,5 @@ namespace StarterAssets
         }
     }
 }
+
 

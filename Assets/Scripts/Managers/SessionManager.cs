@@ -42,7 +42,7 @@ namespace Managers
         private Dictionary<ulong,Character> _characters= new Dictionary<ulong,Character>();
         private void Start()
         {
-            UIManager.Instance.Debug.text = "SessionManager.start()";
+            
             UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
             transport.ConnectionData.Address = Client.instance.settings.ip;
             if (_role == Role.Server)
@@ -141,7 +141,7 @@ namespace Managers
         [ClientRpc]
         public void OnClientConnectedClientRpc(ClientRpcParams clientRpcParams = default)
         {
-            UIManager.Instance.Debug.text = "SessionManager.clientconnectclientrpc()";
+            
             long accountID = 0; 
             SpawnCharacterServerRpc(accountID);
         }

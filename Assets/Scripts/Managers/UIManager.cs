@@ -35,7 +35,6 @@ namespace Managers
         public TextMeshProUGUI InventoryGridTitle2 =null;
         public Button CloseButton=null;
 
-        public Text Debug=null;
         private Item _itemToPick=null;public Item ItemToPick { get => _itemToPick; set { _itemToPick = value; OnItemToPickUpdated(); } }
         private Character _characterToLoot = null;public Character CharacterToLoot { get => _characterToLoot; set { _characterToLoot = value;OnCharacterToLootUpdated(); } }
         private Character _characterLootTarget = null;
