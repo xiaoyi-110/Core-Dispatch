@@ -378,6 +378,8 @@ namespace StarterAssets
                     }
                 }
             }
+
+            ApplyMovementCorrection();
         }
 private void LateUpdate()
         {

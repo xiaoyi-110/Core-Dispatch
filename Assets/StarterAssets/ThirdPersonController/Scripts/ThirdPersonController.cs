@@ -108,6 +108,7 @@ namespace StarterAssets
 
         private bool _rotateOnMove = true;
         private bool _intialized = false;
+        private uint _movementTick = 0;
 
         private const float _threshold = 0.01f;
         //private Vector2 _aimedMovingAnimationInput=Vector2.zero;
@@ -161,6 +162,7 @@ namespace StarterAssets
             ShowInventoryUI();
             ShowPickupUI();
             Move();
+            SendMovementCommand();
         }
 
         private void LateUpdate()
