@@ -3219,6 +3219,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f43ca849ac547f24bbfcec2cb2aec795, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  useFixedPort: 1
+  fixedPort: 7777
+  itemSyncInterval: 0.1
+  minItemSyncInterval: 0.05
+  maxItemSyncInterval: 0.25
+  highLoadItemCount: 12
+  maxTradeDistance: 3
+  minTradeInterval: 0.25
 --- !u!1 &1541353843
 GameObject:
   m_ObjectHideFlags: 0

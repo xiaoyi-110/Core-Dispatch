@@ -1,19 +1,155 @@
-using DevelopersHub.RealtimeNetworking.Client;
+﻿using DevelopersHub.RealtimeNetworking.Client;
 using Gameplay.GameplayObjects.Items;
-using LitJson;
 using StarterAssets;
 using System.Collections;
 using System.Collections.Generic;
-using System.Threading;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using Unity.VisualScripting;
 using UnityEngine;
+using Utility;
+using NetcodeDiagnostics;
 
 namespace Managers
 {
     public class SessionManager : NetworkBehaviour
     {
+        [System.Serializable]
+        public struct TransferRequest : INetworkSerializable
+        {
+            public string NetworkId;
+            public int Count;
+
+            public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+            {
+                serializer.SerializeValue(ref NetworkId);
+                serializer.SerializeValue(ref Count);
+            }
+        }
+
+        [System.Serializable]
+        public struct TradeItemNetData : INetworkSerializable
+        {
+            public Item.Data item;
+            public bool merge;
+            public string mergeID;
+
+            public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+            {
+                serializer.SerializeValue(ref item.Id);
+                serializer.SerializeValue(ref item.NetworkId);
+                serializer.SerializeValue(ref item.Value);
+                serializer.SerializeValue(ref merge);
+                serializer.SerializeValue(ref mergeID);
+            }
+        }
+
+        [System.Serializable]
+        public struct SplitItemNetData : INetworkSerializable
+        {
+            public string Id;
+            public string NetworkId;
+            public int Count;
+
+            public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+            {
+                serializer.SerializeValue(ref Id);
+                serializer.SerializeValue(ref NetworkId);
+                serializer.SerializeValue(ref Count);
+            }
+        }
+
+        [System.Serializable]
+        public struct ItemStateNetData : INetworkSerializable
+        {
+            public string Id;
+            public string NetworkId;
+            public int Count;
+            public Vector3 Position;
+            public Vector3 Rotation;
+
+            public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+            {
+                serializer.SerializeValue(ref Id);
+                serializer.SerializeValue(ref NetworkId);
+                serializer.SerializeValue(ref Count);
+                serializer.SerializeValue(ref Position);
+                serializer.SerializeValue(ref Rotation);
+            }
+        }
+
+        [System.Serializable]
+        public struct ItemEntryNetData : INetworkSerializable
+        {
+            public string ItemId;
+            public string NetworkId;
+            public int Count;
+
+            public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+            {
+                serializer.SerializeValue(ref ItemId);
+                serializer.SerializeValue(ref NetworkId);
+                serializer.SerializeValue(ref Count);
+            }
+        }
+
+        [System.Serializable]
+        public struct CharacterInitNetData : INetworkSerializable
+        {
+            public float Health;
+            public ItemEntryNetData[] Items;
+            public string[] EquippedIds;
+
+            public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+            {
+                serializer.SerializeValue(ref Health);
+                SerializeItemEntries(ref Items, serializer);
+                SerializeStringArray(ref EquippedIds, serializer);
+            }
+
+            private static void SerializeItemEntries<T>(ref ItemEntryNetData[] entries, BufferSerializer<T> serializer) where T : IReaderWriter
+            {
+                int count = entries != null ? entries.Length : 0;
+                serializer.SerializeValue(ref count);
+
+                if (serializer.IsReader)
+                {
+                    entries = new ItemEntryNetData[count];
+                }
+
+                for (int i = 0; i < count; i++)
+                {
+                    ItemEntryNetData entry = entries[i];
+                    serializer.SerializeValue(ref entry);
+                    if (serializer.IsReader)
+                    {
+                        entries[i] = entry;
+                    }
+                }
+            }
+
+            private static void SerializeStringArray<T>(ref string[] values, BufferSerializer<T> serializer) where T : IReaderWriter
+            {
+                int count = values != null ? values.Length : 0;
+                serializer.SerializeValue(ref count);
+
+                if (serializer.IsReader)
+                {
+                    values = new string[count];
+                }
+
+                for (int i = 0; i < count; i++)
+                {
+                    string value = values[i];
+                    serializer.SerializeValue(ref value);
+                    if (serializer.IsReader)
+                    {
+                        values[i] = value;
+                    }
+                }
+            }
+        }
+
         private float _destroyServerAfterSecondsIfNoClientConnected = 300;
         private float _destroyServerAfterSecondsWithoutAnyClient = 120;
         private float _timer = 0;
@@ -23,6 +159,10 @@ namespace Managers
         private static SessionManager _instance;
         private static Role _role = Role.Client; public static Role _Role { get { return _role; } set { _role = value; } }
         private static ushort _port = 0; public static ushort Port { get { return _port; } set { _port = value; } }
+        private static string _overrideAddress = ""; public static string OverrideAddress { get { return _overrideAddress; } set { _overrideAddress = value; } }
+        [Header("Network Port")]
+        [SerializeField] private bool useFixedPort = true;
+        [SerializeField] private ushort fixedPort = 7777;
         public enum Role
         {
             Server = 1, Client = 2
@@ -40,19 +180,41 @@ namespace Managers
         }
 
         private Dictionary<ulong,Character> _characters= new Dictionary<ulong,Character>();
+
+        [Header("Item Sync")]
+        [SerializeField] private float itemSyncInterval = 0.1f;
+        [SerializeField] private float minItemSyncInterval = 0.05f;
+        [SerializeField] private float maxItemSyncInterval = 0.25f;
+        [SerializeField] private int highLoadItemCount = 12;
+        private float _nextItemSyncTime = 0f;
+        private readonly List<ItemStateNetData> _pendingItemStates = new List<ItemStateNetData>();
+        private readonly Dictionary<string, int> _pendingItemIndexByNetId = new Dictionary<string, int>();
+
+        [Header("Trade Validation")]
+        [SerializeField] private float maxTradeDistance = 3f;
+        [SerializeField] private float minTradeInterval = 0.25f;
+        private readonly Dictionary<ulong, float> _lastTradeTime = new Dictionary<ulong, float>();
         private void Start()
         {
             
             UnityTransport transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-            transport.ConnectionData.Address = Client.instance.settings.ip;
             if (_role == Role.Server)
             {
-                _port = (ushort)DevelopersHub.RealtimeNetworking.Client.Tools.FindFreeTcpPort();
+                transport.ConnectionData.Address = "0.0.0.0";
+                _port = useFixedPort ? fixedPort : (ushort)DevelopersHub.RealtimeNetworking.Client.Tools.FindFreeTcpPort();
                 transport.ConnectionData.Port = _port;
                 StartServer();
             }
             else
             {
+                if (!string.IsNullOrEmpty(_overrideAddress))
+                {
+                    transport.ConnectionData.Address = _overrideAddress;
+                }
+                else
+                {
+                    transport.ConnectionData.Address = Client.instance.settings.ip;
+                }
                 transport.ConnectionData.Port = _port;
                 StartClient();
             }
@@ -90,18 +252,23 @@ namespace Managers
                     }
                 }
             }
+
+            if (NetworkManager.Singleton.IsServer)
+            {
+                FlushPendingItemStates();
+            }
         }
         public void StartServer()
         {
             NetworkManager.Singleton.OnClientConnectedCallback += OnClientConnected;
             NetworkManager.Singleton.OnClientDisconnectCallback += OnClientDisconnect;
             NetworkManager.Singleton.StartServer();
-            Item[] allItems = FindObjectsByType<Item>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-            if (allItems != null)
+            EnsureDiagnosticsHud();
+            foreach (var item in WorldRegistry.Items)
             {
-                for (int i = 0; i < allItems.Length; i++)
+                if (item != null)
                 {
-                    allItems[i].ServerInitialize();
+                    item.ServerInitialize();
                 }
             }
             StartCoroutine(InformClients());
@@ -120,7 +287,23 @@ namespace Managers
         }
         private void OnClientDisconnect(ulong obj)
         {
-            _connectedClients--;
+            _connectedClients = Mathf.Max(0, _connectedClients - 1);
+            if (_characters.TryGetValue(obj, out Character character))
+            {
+                if (character != null)
+                {
+                    Unity.Netcode.NetworkObject netObj = character.GetComponent<Unity.Netcode.NetworkObject>();
+                    if (netObj != null && netObj.IsSpawned)
+                    {
+                        netObj.Despawn(true);
+                    }
+                    else
+                    {
+                        Destroy(character.gameObject);
+                    }
+                }
+                _characters.Remove(obj);
+            }
         }
         private IEnumerator InformClients()
         {
@@ -132,6 +315,11 @@ namespace Managers
         {
             _connectedClients++;
             _atLeastOneClientConnected = true;
+            if (_role == Role.Server)
+            {
+                Debug.Log($"[Session] Client connected id={clientId}");
+                SpawnCharacterForClient(clientId);
+            }
             ulong[] target = new ulong[1];
             target[0] = clientId;
             ClientRpcParams clientRpcParams = default;
@@ -141,131 +329,231 @@ namespace Managers
         [ClientRpc]
         public void OnClientConnectedClientRpc(ClientRpcParams clientRpcParams = default)
         {
-            
-            long accountID = 0; 
-            SpawnCharacterServerRpc(accountID);
+            // Client hook if needed. Spawn is handled on server.
         }
 
         [ServerRpc(RequireOwnership = false)]
         public void SpawnCharacterServerRpc(long accountID,ServerRpcParams serverRpcParams = default)
         {
-            Character prefab=PrefabManager.Instance.GetCharacterPrefab("Bot");
-            if (prefab != null)
+            if (!InventoryOps.ValidateServerOnlySender(serverRpcParams.Receive.SenderClientId, "SpawnCharacter")) return;
+            SpawnCharacterForClient(serverRpcParams.Receive.SenderClientId);
+
+        }
+
+        private void SpawnCharacterForClient(ulong clientId)
+        {
+            Character prefab = PrefabManager.Instance.GetCharacterPrefab("Bot");
+            if (prefab == null)
             {
-                Vector3 position=new Vector3(Random.Range(-5,5),0,Random.Range(-5,5));
-                Character character=Instantiate(prefab, position, Quaternion.identity);
-                character.GetComponent<Unity.Netcode.NetworkObject>().SpawnWithOwnership(serverRpcParams.Receive.SenderClientId);
+                Debug.LogWarning("[Session] Character prefab not found.");
+                return;
+            }
 
-                _characters.Add(serverRpcParams.Receive.SenderClientId, character);
+            Vector3 position = new Vector3(Random.Range(-5, 5), 0, Random.Range(-5, 5));
+            Character character = Instantiate(prefab, position, Quaternion.identity);
+            Unity.Netcode.NetworkObject netObj = character.GetComponent<Unity.Netcode.NetworkObject>();
+            if (netObj == null)
+            {
+                Debug.LogWarning("[Session] Character NetworkObject missing.");
+                return;
+            }
+            netObj.SpawnAsPlayerObject(clientId, true);
+            Debug.Log($"[Session] Spawned player character netId={netObj.NetworkObjectId} owner={netObj.OwnerClientId} client={clientId}");
 
-                Dictionary<string,(string, int)> items = new Dictionary<string,(string, int)> { {"0",( "AK47", 1) },{ "1",("7.62x39mm", 300) } };
-                List<string> itemIds = new List<string> ();
-                List<string> equippedIds = new List<string> ();
-                for(int i=0;i<items.Count;i++)
+            if (_characters.TryGetValue(clientId, out Character existing) && existing != null)
+            {
+                Unity.Netcode.NetworkObject existingNet = existing.GetComponent<Unity.Netcode.NetworkObject>();
+                if (existingNet != null && existingNet.IsSpawned)
                 {
-                    itemIds.Add(System.Guid.NewGuid().ToString());
+                    existingNet.Despawn(true);
                 }
-
-                string itemsJson = JsonMapper.ToJson(items);
-                string itemIdJson = JsonMapper.ToJson(itemIds);
-                string equippedJson = JsonMapper.ToJson(equippedIds);
-
-                Item[] Items = FindObjectsByType<Item>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-                List<Item.Data> itemsOnGround = new List<Item.Data>();
-                if (Items != null)
+                else
                 {
-                    for (int i = 0; i < Items.Length; i++)
-                    {
-                        if (string.IsNullOrEmpty(Items[i].NetworkId))
-                        {
-                            Items[i].NetworkId = System.Guid.NewGuid().ToString();
-                        }
-                        if (Items[i].transform.parent == null)
-                        {
-                            itemsOnGround.Add(Items[i].GetData());
-                        }
-                    }
+                    Destroy(existing.gameObject);
                 }
-                string itemsOnGroundJson = JsonMapper.ToJson(itemsOnGround);
+            }
+            _characters[clientId] = character;
 
-                character.InitializeServer(items, itemIds, equippedIds,serverRpcParams.Receive.SenderClientId);
-                character.InitializeClientRpc(itemsJson, itemIdJson, equippedJson,itemsOnGroundJson,serverRpcParams.Receive.SenderClientId);
+            Dictionary<string, (string, int)> items = new Dictionary<string, (string, int)> { { "0", ("AK47", 1) }, { "1", ("7.62x39mm", 300) } };
+            List<string> itemIds = new List<string>();
+            List<string> equippedIds = new List<string>();
+            List<ItemEntryNetData> entries = new List<ItemEntryNetData>();
+            for (int i = 0; i < items.Count; i++)
+            {
+                itemIds.Add(System.Guid.NewGuid().ToString());
+            }
 
-                foreach (var client in _characters) {
-                    if (client.Value != null && client.Value != character)
+            int index = 0;
+            foreach (var entry in items)
+            {
+                entries.Add(new ItemEntryNetData
+                {
+                    ItemId = entry.Value.Item1,
+                    NetworkId = itemIds[index],
+                    Count = entry.Value.Item2
+                });
+                index++;
+            }
+
+            CharacterInitNetData initData = new CharacterInitNetData
+            {
+                Health = 100f,
+                Items = entries.ToArray(),
+                EquippedIds = equippedIds.ToArray()
+            };
+
+            List<ItemStateNetData> itemsOnGround = new List<ItemStateNetData>();
+            foreach (var item in WorldRegistry.Items)
+            {
+                if (item == null) continue;
+                if (string.IsNullOrEmpty(item.NetworkId))
+                {
+                    item.NetworkId = System.Guid.NewGuid().ToString();
+                }
+                if (item.transform.parent == null)
+                {
+                    itemsOnGround.Add(new ItemStateNetData
                     {
-                        Character.Data data=client.Value.GetData();
-                        string json=JsonMapper.ToJson(data);
-
-                        ulong[] target = new ulong[1];
-                        target[0]=serverRpcParams.Receive.SenderClientId;
-                        ClientRpcParams clientRpcParams = default;
-                        clientRpcParams.Send.TargetClientIds = target;
-
-                        client.Value.InitializeClientRpc(json, client.Key, clientRpcParams);
-                    }
+                        Id = item.Id,
+                        NetworkId = item.NetworkId,
+                        Count = item.GetCount(),
+                        Position = item.transform.position,
+                        Rotation = item.transform.eulerAngles
+                    });
                 }
             }
 
+            character.InitializeServer(items, itemIds, equippedIds, clientId);
+            character.InitializeClientRpc(initData, itemsOnGround.ToArray(), clientId);
+
+            foreach (var client in _characters)
+            {
+                if (client.Value != null && client.Value != character)
+                {
+                    CharacterInitNetData remoteData = BuildCharacterInitData(client.Value);
+
+                    ulong[] target = new ulong[1];
+                    target[0] = clientId;
+                    ClientRpcParams clientRpcParams = default;
+                    clientRpcParams.Send.TargetClientIds = target;
+
+                    client.Value.InitializeClientRpc(remoteData, client.Key, clientRpcParams);
+                }
+            }
+        }
+
+        private void EnsureDiagnosticsHud()
+        {
+            GameObject existing = GameObject.Find("__NetDiagnostics");
+            if (existing != null)
+            {
+                return;
+            }
+            GameObject go = new GameObject("__NetDiagnostics");
+            DontDestroyOnLoad(go);
+            go.AddComponent<NetcodeDiagnostics.NetworkDiagnosticsHUD>();
+        }
+
+        private void NotifyTradeResult(ulong character1Id, ulong character2Id, List<TradeItemNetData> items1To2, List<SplitItemNetData> splitItems1, List<TradeItemNetData> items2To1, List<SplitItemNetData> splitItems2)
+        {
+            if (items1To2 == null) items1To2 = new List<TradeItemNetData>();
+            if (items2To1 == null) items2To1 = new List<TradeItemNetData>();
+            if (splitItems1 == null) splitItems1 = new List<SplitItemNetData>();
+            if (splitItems2 == null) splitItems2 = new List<SplitItemNetData>();
+
+            if (items1To2.Count == 0 && items2To1.Count == 0)
+            {
+                InventoryOps.LogInfo($"Trade no valid transfers. c1={character1Id} c2={character2Id}");
+                return;
+            }
+
+            TradeResultNetData result = new TradeResultNetData
+            {
+                Character1Id = character1Id,
+                Character2Id = character2Id,
+                Items1To2 = items1To2.ToArray(),
+                SplitItems1 = splitItems1.ToArray(),
+                Items2To1 = items2To1.ToArray(),
+                SplitItems2 = splitItems2.ToArray()
+            };
+
+            TradeItemsBetweenCharactersClientRpc(result);
+            InventoryOps.LogInfo($"Trade success. c1={character1Id} c2={character2Id} c1To2={items1To2.Count} c2To1={items2To1.Count}");
         }
         public void StartClient()
         {
             NetworkManager.Singleton.StartClient();
         }
 
-        [System.Serializable]
-        public struct TradeItemData
+
+        private CharacterInitNetData BuildCharacterInitData(Character character)
         {
-            public Item.Data item;
-            public bool merge;
-            public string mergeID;
+            if (character == null)
+            {
+                return default;
+            }
+
+            List<ItemEntryNetData> entries = new List<ItemEntryNetData>();
+            List<string> equippedIds = new List<string>();
+
+            for (int i = 0; i < character.Inventory.Count; i++)
+            {
+                Item item = character.Inventory[i];
+                if (item == null)
+                {
+                    continue;
+                }
+                entries.Add(new ItemEntryNetData
+                {
+                    ItemId = item.Id,
+                    NetworkId = item.NetworkId,
+                    Count = item.GetCount()
+                });
+            }
+
+            Weapon equippedWeapon = character.CurrentWeapon;
+            if (equippedWeapon != null)
+            {
+                equippedIds.Add(equippedWeapon.NetworkId);
+            }
+            Ammo equippedAmmo = character.CurrentAmmo;
+            if (equippedAmmo != null)
+            {
+                equippedIds.Add(equippedAmmo.NetworkId);
+            }
+
+            return new CharacterInitNetData
+            {
+                Health = character.Health,
+                Items = entries.ToArray(),
+                EquippedIds = equippedIds.ToArray()
+            };
         }
+
         public void TradeItemsBetweenCharacters(Character character1, Character character2,Dictionary<Item,int> character1To2Items,Dictionary<Item,int> character2To1Items)
         {
             if(character1==null || character2==null||character1==character2)
             {
+                InventoryOps.LogWarning("Trade invalid characters.");
                 return;
             }
-            Dictionary<string, int> serializable1To2 = new Dictionary<string, int>();
-            Dictionary<string,int> serializable2To1=new Dictionary<string,int>();
-            if (character1To2Items != null)
+            List<TransferRequest> request1To2 = InventoryOps.BuildTransferRequests(character1To2Items, character1.Inventory);
+            List<TransferRequest> request2To1 = InventoryOps.BuildTransferRequests(character2To1Items, character2.Inventory);
+            if (request1To2.Count > 0 || request2To1.Count > 0)
             {
-                foreach(var item in character1To2Items)
-                {
-                    if(item.Value<=0&&item.Key is Ammo ammo)
-                    {
-                        continue;
-                    }
-                    if (item.Key != null && character1.Inventory.Contains(item.Key))
-                    {
-                        serializable1To2.Add(item.Key.NetworkId, item.Value);
-                    }
-                }
+                TradeItemsBetweenCharactersServerRpc(character1.ClientID, character2.ClientID, request1To2.ToArray(), request2To1.ToArray());
             }
-            if (character2To1Items != null)
+            else
             {
-                foreach (var item in character2To1Items)
-                {
-                    if (item.Value <= 0 && item.Key is Ammo ammo)
-                    {
-                        continue;
-                    }
-                    if (item.Key != null && character2.Inventory.Contains(item.Key))
-                    {
-                        serializable2To1.Add(item.Key.NetworkId, item.Value);
-                    }
-                }
-            }
-            if (serializable1To2.Count > 0 || serializable2To1.Count > 0)
-            {
-                string json1 = JsonMapper.ToJson(serializable1To2);
-                string json2= JsonMapper.ToJson(serializable2To1);
-                TradeItemsBetweenCharactersServerRpc(character1.ClientID, character2.ClientID, json1, json2);
+                InventoryOps.LogInfo("Trade empty request list.");
             }
         }
         [ServerRpc(RequireOwnership =false)]
-        private void TradeItemsBetweenCharactersServerRpc(ulong character1Id, ulong character2Id, string character1To2Json, string character2To1Json)
+        private void TradeItemsBetweenCharactersServerRpc(ulong character1Id, ulong character2Id, TransferRequest[] character1To2, TransferRequest[] character2To1, ServerRpcParams serverRpcParams = default)
         {
+            if (character1To2 == null) character1To2 = new TransferRequest[0];
+            if (character2To1 == null) character2To1 = new TransferRequest[0];
+
             Character character1 = null;
             Character character2 = null;
             if (_characters.ContainsKey(character1Id))
@@ -276,269 +564,175 @@ namespace Managers
             {
                 character2 = _characters[character2Id];
             }
-            if (character1 == null || character2 == null || character1 == character2)
+            if (!ValidateTradeRequest(serverRpcParams.Receive.SenderClientId, character1, character2))
             {
                 return;
             }
 
-            Dictionary<string, int> serializable1To2 = JsonMapper.ToObject<Dictionary<string, int>>(character1To2Json);
-            Dictionary<string, int> serializable2To1 = JsonMapper.ToObject<Dictionary<string, int>>(character2To1Json);
+            List<TradeItemNetData> items1To2 = new List<TradeItemNetData>();
+            List<SplitItemNetData> splitItems1 = new List<SplitItemNetData>();
+            List<TradeItemNetData> items2To1 = new List<TradeItemNetData>();
+            List<SplitItemNetData> splitItems2 = new List<SplitItemNetData>();
 
-            List<TradeItemData> items1To2 = new List<TradeItemData>();
-            List<Item.Data> splitItems1 = new List<Item.Data>();
-            List<TradeItemData> items2To1 = new List<TradeItemData>();
-            List<Item.Data> splitItems2 = new List<Item.Data>();
-
-            foreach (var item in serializable1To2)
+            ulong sender = serverRpcParams.Receive.SenderClientId;
+            foreach (var item in character1To2)
             {
-                for (int i = 0; i < character1.Inventory.Count; i++)
+                if (sender != character1Id)
                 {
-                    if (item.Key == character1.Inventory[i].NetworkId)
-                    {
-                        int count = item.Value;
-                        int remained = 0;
-                        int c = 0;
-                        if (character1.Inventory[i].GetType() == typeof(Weapon))
-                        {
-                            count = ((Weapon)character1.Inventory[i]).AmmoCount;
-                        }
-                        else
-                        {
-                            c = character1.Inventory[i].GetCount();
-                            if (count <= 0)
-                            {
-                                break;
-                            }
-                            else if (c < count)
-                            {
-                                count = c;
-                            }
-                            else if (c > count)
-                            {
-                                remained = c - count;
-                                c = count;
-                                character1.Inventory[i].SetCount(c);
-                            }
-                        }
-                        if (remained > 0)
-                        {
-                            Item prefab = PrefabManager.Instance.GetItemPrefab(character1.Inventory[i].Id);
-                            if (prefab != null)
-                            {
-                                Item splitItem = Instantiate(prefab, transform);
-                                splitItem.NetworkId = System.Guid.NewGuid().ToString();
-                                splitItem.SetCount(remained);
-                                character1.AddItemToInventoryLocally(splitItem);
-                                splitItems1.Add(splitItem.GetData());
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-
-                        Item merge = null;
-                        for (int j = 0; j < character2.Inventory.Count; j++)
-                        {
-                            if (character2.Inventory[j].Id == character1.Inventory[i].Id)
-                            {
-                                merge = character2.Inventory[j];
-                                break;
-                            }
-                        }
-
-                        character2.AddItemToInventoryLocally(character1.Inventory[i], merge);
-
-                        TradeItemData data = new TradeItemData();
-                        data.item = character1.Inventory[i].GetData();
-                        data.item.Value = count;
-                        if (merge == null)
-                        {
-                            data.merge = false;
-                        }
-                        else
-                        {
-                            data.merge = true;
-                            data.mergeID = merge.NetworkId;
-                        }
-                        items1To2.Add(data);
-
-                        character1.RemoveItemFromInventoryLocally(character1.Inventory[i]);
-                        break;
-                    }
+                    InventoryOps.LogWarning($"Trade sender mismatch for character1 transfers. sender={sender} c1={character1Id}");
+                    break;
                 }
-            }
-
-            foreach (var item in serializable2To1)
-            {
-                for (int i = 0; i < character2.Inventory.Count; i++)
+                if (!InventoryOps.TryGetValidItemForTransfer(character1.Inventory, item.NetworkId, item.Count, out Item source))
                 {
-                    if (item.Key == character2.Inventory[i].NetworkId)
-                    {
-                        int count = item.Value;
-                        int remained = 0;
-                        int c = 0;
-                        if (character2.Inventory[i].GetType() == typeof(Weapon))
-                        {
-                            count = ((Weapon)character2.Inventory[i]).AmmoCount;
-                        }
-                        else
-                        {
-                            c = character2.Inventory[i].GetCount();
-                            if (count <= 0)
-                            {
-                                break;
-                            }
-                            else if (c < count)
-                            {
-                                count = c;
-                            }
-                            else if (c > count)
-                            {
-                                remained = c - count;
-                                c = count;
-                                character2.Inventory[i].SetCount(c);
-                            }
-                        }
-                        if (remained > 0)
-                        {
-                            Item prefab = PrefabManager.Instance.GetItemPrefab(character2.Inventory[i].Id);
-                            if (prefab != null)
-                            {
-                                Item splitItem = Instantiate(prefab, transform);
-                                splitItem.NetworkId = System.Guid.NewGuid().ToString();
-                                splitItem.SetCount(remained);
-                                character2.AddItemToInventoryLocally(splitItem);
-                                splitItems2.Add(splitItem.GetData());
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-
-                        Item merge = null;
-                        for (int j = 0; j < character1.Inventory.Count; j++)
-                        {
-                            if (character1.Inventory[j].Id == character2.Inventory[i].Id)
-                            {
-                                merge = character1.Inventory[j];
-                                break;
-                            }
-                        }
-
-                        character1.AddItemToInventoryLocally(character2.Inventory[i], merge);
-
-                        TradeItemData data = new TradeItemData();
-                        data.item = character2.Inventory[i].GetData();
-                        data.item.Value = count;
-                        if (merge == null)
-                        {
-                            data.merge = false;
-                        }
-                        else
-                        {
-                            data.merge = true;
-                            data.mergeID = merge.NetworkId;
-                        }
-                        items2To1.Add(data);
-
-                        character2.RemoveItemFromInventoryLocally(character2.Inventory[i]);
-                        break;
-                    }
+                    InventoryOps.LogWarning($"Trade invalid request from character1. netId={item.NetworkId} count={item.Count} c1={character1Id}");
+                    continue;
                 }
+                if (!InventoryOps.IsOwnedByCharacter(source, character1))
+                {
+                    InventoryOps.LogWarning($"Trade ownership mismatch for character1. netId={item.NetworkId} c1={character1Id}");
+                    continue;
+                }
+                if (!InventoryOps.TryTransferItemWithSource(
+                        source,
+                        character2.Inventory,
+                        item.Count,
+                        transform,
+                        out Item movedItem,
+                        out Item merge,
+                        out Item splitItem,
+                        out int movedCount))
+                {
+                    continue;
+                }
+
+                if (splitItem != null)
+                {
+                    character1.AddItemToInventoryLocally(splitItem);
+                    splitItems1.Add(new SplitItemNetData
+                    {
+                        Id = splitItem.Id,
+                        NetworkId = splitItem.NetworkId,
+                        Count = splitItem.GetCount()
+                    });
+                }
+
+                character2.AddItemToInventoryLocally(movedItem, merge);
+
+                TradeItemNetData data = new TradeItemNetData();
+                data.item = movedItem.GetData();
+                data.item.Value = movedCount;
+                if (merge == null)
+                {
+                    data.merge = false;
+                }
+                else
+                {
+                    data.merge = true;
+                    data.mergeID = merge.NetworkId;
+                }
+                items1To2.Add(data);
+
+                character1.RemoveItemFromInventoryLocally(movedItem);
             }
 
-            if (items2To1.Count > 0 || items1To2.Count > 0)
+            foreach (var item in character2To1)
             {
-                string json1To2 = JsonMapper.ToJson(items1To2);
-                string json1Split = JsonMapper.ToJson(splitItems1);
-                string json2To1 = JsonMapper.ToJson(items2To1);
-                string json2Split = JsonMapper.ToJson(splitItems2);
+                if (sender != character2Id)
+                {
+                    InventoryOps.LogWarning($"Trade sender mismatch for character2 transfers. sender={sender} c2={character2Id}");
+                    break;
+                }
+                if (!InventoryOps.TryGetValidItemForTransfer(character2.Inventory, item.NetworkId, item.Count, out Item source))
+                {
+                    InventoryOps.LogWarning($"Trade invalid request from character2. netId={item.NetworkId} count={item.Count} c2={character2Id}");
+                    continue;
+                }
+                if (!InventoryOps.IsOwnedByCharacter(source, character2))
+                {
+                    InventoryOps.LogWarning($"Trade ownership mismatch for character2. netId={item.NetworkId} c2={character2Id}");
+                    continue;
+                }
+                if (!InventoryOps.TryTransferItemWithSource(
+                        source,
+                        character1.Inventory,
+                        item.Count,
+                        transform,
+                        out Item movedItem,
+                        out Item merge,
+                        out Item splitItem,
+                        out int movedCount))
+                {
+                    continue;
+                }
 
-                TradeItemsBetweenCharactersClientRpc(
-                    character1Id,
-                    character2Id,
-                    json1To2,
-                    json1Split,
-                    json2To1,
-                    json2Split
-                );
+                if (splitItem != null)
+                {
+                    character2.AddItemToInventoryLocally(splitItem);
+                    splitItems2.Add(new SplitItemNetData
+                    {
+                        Id = splitItem.Id,
+                        NetworkId = splitItem.NetworkId,
+                        Count = splitItem.GetCount()
+                    });
+                }
+
+                character1.AddItemToInventoryLocally(movedItem, merge);
+
+                TradeItemNetData data = new TradeItemNetData();
+                data.item = movedItem.GetData();
+                data.item.Value = movedCount;
+                if (merge == null)
+                {
+                    data.merge = false;
+                }
+                else
+                {
+                    data.merge = true;
+                    data.mergeID = merge.NetworkId;
+                }
+                items2To1.Add(data);
+
+                character2.RemoveItemFromInventoryLocally(movedItem);
             }
+
+            NotifyTradeResult(character1Id, character2Id, items1To2, splitItems1, items2To1, splitItems2);
         }
         [ClientRpc]
-        private void TradeItemsBetweenCharactersClientRpc(ulong character1Id, ulong character2Id, string json1To2, string json1Split, string json2To1, string json2Split)
+        private void TradeItemsBetweenCharactersClientRpc(TradeResultNetData result)
         {
             Character character1 = null;
             Character character2 = null;
-
-            Character[] allCharacters = FindObjectsByType<Character>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-
-            if (allCharacters != null)
-            {
-                for (int i = 0; i < allCharacters.Length; i++)
-                {
-                    if (allCharacters[i].ClientID == character1Id)
-                    {
-                        character1 = allCharacters[i];
-                    }
-                    else if (allCharacters[i].ClientID == character2Id)
-                    {
-                        character2 = allCharacters[i];
-                    }
-                    if (character1 != null && character2 != null)
-                    {
-                        break;
-                    }
-                }
-            }
+            WorldRegistry.TryGetCharacter(result.Character1Id, out character1);
+            WorldRegistry.TryGetCharacter(result.Character2Id, out character2);
 
             if (character1 == null || character2 == null || character1 == character2)
             {
                 return;
             }
 
-            List<TradeItemData> items1To2 = JsonMapper.ToObject<List<TradeItemData>>(json1To2);
-            List<Item.Data> splitItems1 = JsonMapper.ToObject<List<Item.Data>>(json1Split);
-            List<TradeItemData> items2To1 = JsonMapper.ToObject<List<TradeItemData>>(json2To1);
-            List<Item.Data> splitItems2 = JsonMapper.ToObject<List<Item.Data>>(json2Split);
+            TradeItemNetData[] items1To2 = result.Items1To2 ?? new TradeItemNetData[0];
+            SplitItemNetData[] splitItems1 = result.SplitItems1 ?? new SplitItemNetData[0];
+            TradeItemNetData[] items2To1 = result.Items2To1 ?? new TradeItemNetData[0];
+            SplitItemNetData[] splitItems2 = result.SplitItems2 ?? new SplitItemNetData[0];
 
             foreach (var item in items1To2)
             {
-                bool found = false;
-                for (int i = 0; i < character1.Inventory.Count; i++)
+                Item source = InventoryOps.FindItemByNetworkId(character1.Inventory, item.item.NetworkId);
+                if (source == null)
                 {
-                    if (character1.Inventory[i].NetworkId == item.item.NetworkId)
-                    {
-                        character1.Inventory[i].SetCount(item.item.Value);
-
-                        Item merge = null;
-                        if (item.merge && string.IsNullOrEmpty(item.mergeID) == false)
-                        {
-                            for (int j = 0; j < character2.Inventory.Count; j++)
-                            {
-                                if (character2.Inventory[j].NetworkId == item.mergeID)
-                                {
-                                    merge = character2.Inventory[j];
-                                    break;
-                                }
-                            }
-                            if (merge == null)
-                            {
-                                // Problem
-                            }
-                        }
-
-                        character2.AddItemToInventoryLocally(character1.Inventory[i], merge);
-                        character1.RemoveItemFromInventoryLocally(character1.Inventory[i]);
-                        found = true;
-                        break;
-                    }
+                    InventoryOps.LogWarning($"Trade source item not found in character1 inventory. itemId={item.item.Id} netId={item.item.NetworkId}");
+                    continue;
                 }
-                if (found == false)
+                source.SetCount(item.item.Value);
+
+                Item merge = InventoryOps.ResolveMergeTarget(character2.Inventory, item.merge, item.mergeID, source);
+                if (item.merge && merge == null)
                 {
-                    // Problem
+                    InventoryOps.LogWarning($"Trade merge target not found for character2. mergeID={item.mergeID}");
                 }
+
+                character2.AddItemToInventoryLocally(source, merge);
+                character1.RemoveItemFromInventoryLocally(source);
             }
 
             foreach (var item in splitItems1)
@@ -548,47 +742,29 @@ namespace Managers
                 {
                     Item splitItem = Instantiate(prefab, transform);
                     splitItem.NetworkId = item.NetworkId;
-                    splitItem.SetCount(item.Value);
+                    splitItem.SetCount(item.Count);
                     character1.AddItemToInventoryLocally(splitItem);
                 }
             }
 
             foreach (var item in items2To1)
             {
-                bool found = false;
-                for (int i = 0; i < character2.Inventory.Count; i++)
+                Item source = InventoryOps.FindItemByNetworkId(character2.Inventory, item.item.NetworkId);
+                if (source == null)
                 {
-                    if (character2.Inventory[i].NetworkId == item.item.NetworkId)
-                    {
-                        character2.Inventory[i].SetCount(item.item.Value);
-
-                        Item merge = null;
-                        if (item.merge && string.IsNullOrEmpty(item.mergeID) == false)
-                        {
-                            for (int j = 0; j < character1.Inventory.Count; j++)
-                            {
-                                if (character1.Inventory[j].NetworkId == item.mergeID)
-                                {
-                                    merge = character1.Inventory[j];
-                                    break;
-                                }
-                            }
-                            if (merge == null)
-                            {
-                                // Problem
-                            }
-                        }
-
-                        character1.AddItemToInventoryLocally(character2.Inventory[i], merge);
-                        character2.RemoveItemFromInventoryLocally(character2.Inventory[i]);
-                        found = true;
-                        break;
-                    }
+                    InventoryOps.LogWarning($"Trade source item not found in character2 inventory. itemId={item.item.Id} netId={item.item.NetworkId}");
+                    continue;
                 }
-                if (found == false)
+                source.SetCount(item.item.Value);
+
+                Item merge = InventoryOps.ResolveMergeTarget(character1.Inventory, item.merge, item.mergeID, source);
+                if (item.merge && merge == null)
                 {
-                    // Problem
+                    InventoryOps.LogWarning($"Trade merge target not found for character1. mergeID={item.mergeID}");
                 }
+
+                character1.AddItemToInventoryLocally(source, merge);
+                character2.RemoveItemFromInventoryLocally(source);
             }
 
             foreach (var item in splitItems2)
@@ -598,38 +774,150 @@ namespace Managers
                 {
                     Item splitItem = Instantiate(prefab, transform);
                     splitItem.NetworkId = item.NetworkId;
-                    splitItem.SetCount(item.Value);
+                    splitItem.SetCount(item.Count);
                     character2.AddItemToInventoryLocally(splitItem);
                 }
             }
         }
-        public void UpdateItemPosition(Item item)
+        public void QueueItemState(Item item)
         {
-            if (item != null)
+            if (item == null || !NetworkManager.Singleton.IsServer)
             {
-                Item.Data data = item.GetData();
-                string json = JsonMapper.ToJson(data);
-                UpdateItemPositionClientRpc(json);
+                return;
+            }
+            if (string.IsNullOrEmpty(item.NetworkId))
+            {
+                return;
+            }
+
+            ItemStateNetData data = new ItemStateNetData
+            {
+                Id = item.Id,
+                NetworkId = item.NetworkId,
+                Count = item.GetCount(),
+                Position = item.transform.position,
+                Rotation = item.transform.eulerAngles
+            };
+
+            if (_pendingItemIndexByNetId.TryGetValue(data.NetworkId, out int index))
+            {
+                _pendingItemStates[index] = data;
+            }
+            else
+            {
+                _pendingItemIndexByNetId[data.NetworkId] = _pendingItemStates.Count;
+                _pendingItemStates.Add(data);
             }
         }
         [ClientRpc]
-        private void UpdateItemPositionClientRpc(string itemJson)
+        private void UpdateItemPositionClientRpc(ItemStateNetData[] dataBatch)
         {
-            Item.Data data = JsonMapper.ToObject<Item.Data>(itemJson);
-            Item[] allItems = FindObjectsByType<Item>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-            if (allItems != null)
+            if (dataBatch == null || dataBatch.Length == 0)
             {
-                for (int i = 0; i < allItems.Length; i++)
+                return;
+            }
+            NetworkDiagnostics.RecordItemSync(dataBatch.Length);
+
+            for (int i = 0; i < dataBatch.Length; i++)
+            {
+                ItemStateNetData data = dataBatch[i];
+                if (WorldRegistry.TryGetItemByNetworkId(data.NetworkId, out Item item))
                 {
-                    if (allItems[i].NetworkId== data.NetworkId)
-                    {
-                        allItems[i].transform.position = new Vector3(data.Position[0], data.Position[1], data.Position[2]);
-                        allItems[i].transform.eulerAngles = new Vector3(data.Rotation[0], data.Rotation[1], data.Rotation[2]);
-                        break;
-                    }
+                    item.transform.position = data.Position;
+                    item.transform.eulerAngles = data.Rotation;
                 }
+            }
+        }
+
+        private void FlushPendingItemStates()
+        {
+            if (_pendingItemStates.Count == 0)
+            {
+                return;
+            }
+            if (Time.time < _nextItemSyncTime)
+            {
+                return;
+            }
+            if (_pendingItemStates.Count >= highLoadItemCount)
+            {
+                itemSyncInterval = Mathf.Max(minItemSyncInterval, itemSyncInterval * 0.8f);
+            }
+            else
+            {
+                itemSyncInterval = Mathf.Min(maxItemSyncInterval, itemSyncInterval * 1.05f);
+            }
+            _nextItemSyncTime = Time.time + itemSyncInterval;
+
+            UpdateItemPositionClientRpc(_pendingItemStates.ToArray());
+            _pendingItemStates.Clear();
+            _pendingItemIndexByNetId.Clear();
+        }
+
+        private bool ValidateTradeRequest(ulong sender, Character character1, Character character2)
+        {
+            if (character1 == null || character2 == null || character1 == character2)
+            {
+                InventoryOps.LogWarning("Trade invalid server targets.");
+                return false;
+            }
+
+            if (!InventoryOps.ValidateTradeSender(sender, character1.ClientID, character2.ClientID))
+            {
+                return false;
+            }
+
+            float distance = Vector3.Distance(character1.transform.position, character2.transform.position);
+            if (distance > maxTradeDistance)
+            {
+                InventoryOps.LogWarning($"Trade distance too far. dist={distance:0.00} max={maxTradeDistance:0.00}");
+                return false;
+            }
+
+            if (!ValidateTradeRateLimit(character1.ClientID) || !ValidateTradeRateLimit(character2.ClientID))
+            {
+                InventoryOps.LogWarning("Trade rate limited.");
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool ValidateTradeRateLimit(ulong clientId)
+        {
+            float now = Time.time;
+            if (_lastTradeTime.TryGetValue(clientId, out float lastTime))
+            {
+                if (now - lastTime < minTradeInterval)
+                {
+                    return false;
+                }
+            }
+            _lastTradeTime[clientId] = now;
+            return true;
+        }
+
+        [System.Serializable]
+        public struct TradeResultNetData : INetworkSerializable
+        {
+            public ulong Character1Id;
+            public ulong Character2Id;
+            public TradeItemNetData[] Items1To2;
+            public SplitItemNetData[] SplitItems1;
+            public TradeItemNetData[] Items2To1;
+            public SplitItemNetData[] SplitItems2;
+
+            public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+            {
+                serializer.SerializeValue(ref Character1Id);
+                serializer.SerializeValue(ref Character2Id);
+                serializer.SerializeValue(ref Items1To2);
+                serializer.SerializeValue(ref SplitItems1);
+                serializer.SerializeValue(ref Items2To1);
+                serializer.SerializeValue(ref SplitItems2);
             }
         }
     }
 }
+
 

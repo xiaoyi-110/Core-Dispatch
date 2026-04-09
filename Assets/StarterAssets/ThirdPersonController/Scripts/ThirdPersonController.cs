@@ -2,6 +2,7 @@
 using Managers;
 using System.Collections;
 using UnityEngine;
+using Unity.Netcode;
 #if ENABLE_INPUT_SYSTEM 
 using UnityEngine.InputSystem;
 using UnityEngine.Windows;
@@ -29,12 +30,11 @@ namespace StarterAssets
         [Tooltip("Sprint speed of the character in m/s")]
         public float SprintSpeed = 5.335f;
         [Header("Sprint Settings")]
-        public float SprintDuration = 1.0f; // 冲刺持续时间（秒）
         public float SprintCooldown = 1.0f; // 冲刺冷却（可选）
 
         //private bool _isSprinting = false;
-        private float _sprintTimer = 0f;
         private float _sprintCooldownTimer = 0f;
+        private bool _wasRunningBeforeSprint = false;
 
 
         [Tooltip("How fast the character turns to face movement direction")]
@@ -108,7 +108,9 @@ namespace StarterAssets
 
         private bool _rotateOnMove = true;
         private bool _intialized = false;
+        private bool _loggedInitRole = false;
         private uint _movementTick = 0;
+        private float _nextInputRouteLogTime = 0f;
 
         private const float _threshold = 0.01f;
         //private Vector2 _aimedMovingAnimationInput=Vector2.zero;
@@ -152,17 +154,66 @@ namespace StarterAssets
         private void Update()
         {
             CheckInitialize();
+            if (!_intialized || _character == null || !_character.IsOwner || !_character.IsSpawned)
+            {
+                return;
+            }
+            StabilizeInputRouting();
             HandleAim();
             HandleShooting();
             HandleReload();
             HandleSwitchWeapon();
             HandleSprint();
-            JumpAndGravity();
             HandleHoslterWeapon();
             ShowInventoryUI();
             ShowPickupUI();
             Move();
             SendMovementCommand();
+        }
+
+        private void StabilizeInputRouting()
+        {
+#if ENABLE_INPUT_SYSTEM
+            if (_playerInput == null || _input == null)
+            {
+                return;
+            }
+
+            if (!Application.isFocused)
+            {
+                // Prevent stale input states when a client window loses focus.
+                _input.move = Vector2.zero;
+                _input.look = Vector2.zero;
+                _input.jump = false;
+                _input.shoot = false;
+                _input.sprint = false;
+                _input.run = false;
+                return;
+            }
+
+            string scheme = _playerInput.currentControlScheme ?? string.Empty;
+            if (scheme == "Xbox Controller")
+            {
+                bool hasGamepad = Gamepad.all.Count > 0;
+                bool keyboardIntent = Keyboard.current != null && Keyboard.current.anyKey.wasPressedThisFrame;
+                bool mouseIntent = Mouse.current != null &&
+                                   (Mouse.current.leftButton.wasPressedThisFrame ||
+                                    Mouse.current.rightButton.wasPressedThisFrame ||
+                                    Mouse.current.delta.ReadValue().sqrMagnitude > 0.0001f);
+
+                if ((!hasGamepad || keyboardIntent || mouseIntent) &&
+                    Keyboard.current != null &&
+                    Mouse.current != null)
+                {
+                    _playerInput.SwitchCurrentControlScheme("KeyboardMouse", Keyboard.current, Mouse.current);
+                    if (Time.time >= _nextInputRouteLogTime)
+                    {
+                        _nextInputRouteLogTime = Time.time + 1f;
+                        Debug.Log($"[Input] Switched control scheme to KeyboardMouse (hasGamepad={hasGamepad}, keyboardIntent={keyboardIntent}, mouseIntent={mouseIntent})");
+                    }
+                }
+            }
+#endif
         }
 
         private void LateUpdate()
@@ -190,9 +241,19 @@ namespace StarterAssets
                 }
                 else
                 {
-                    if (_character.ClientID > 0)
+                    if (_character.IsSpawned)
                     {
-                        DestroyControllers();
+                        bool shouldDestroyControllers = !_character.IsOwner && _character.IsClient && !_character.IsServer;
+                        if (!_loggedInitRole)
+                        {
+                            _loggedInitRole = true;
+                            Debug.Log($"[MoveInit] non-owner role client={_character.IsClient} server={_character.IsServer} destroyControllers={shouldDestroyControllers} netId={( _character.NetworkObject != null ? _character.NetworkObject.NetworkObjectId : 0UL)} ownerClientId={_character.OwnerClientId}");
+                        }
+                        // Only destroy local control components on non-owner client proxies.
+                        if (shouldDestroyControllers)
+                        {
+                            DestroyControllers();
+                        }
                     }
                     return;
                 }
@@ -259,10 +320,9 @@ private void HandleAim()
             if (_input.switchWeapon!=0)
             {
                 _character.SwitchWeapon(_input.switchWeapon);
-                            
+                _input.switchWeapon = 0;
             }
         }
-
         private void HandleHoslterWeapon()
         {
             if (_input.holsterWeapon)
@@ -278,19 +338,35 @@ private void HandleAim()
             if (_sprintCooldownTimer > 0f)
                 _sprintCooldownTimer -= Time.deltaTime;
 
-            if (_input.sprint && !_character.IsSprinting && _sprintCooldownTimer <= 0f&&!_character.IsAiming)
+            bool hasMoveInput = _input.move != Vector2.zero;
+            if (_character.IsAiming || !hasMoveInput)
+            {
+                if (_character.IsSprinting)
+                {
+                    _character.IsSprinting = false;
+                    _sprintCooldownTimer = SprintCooldown;
+                }
+            }
+
+            if (_input.sprint && !_character.IsSprinting && _sprintCooldownTimer <= 0f && !_character.IsAiming && hasMoveInput)
             {
                 _character.IsSprinting = true;
-                _sprintTimer = SprintDuration;
+                _wasRunningBeforeSprint = _character.IsRunning;
+                _character.IsRunning = false;
             }
 
             if (_character.IsSprinting)
             {
-                _sprintTimer -= Time.deltaTime;
-                if (_sprintTimer <= 0f)
+                if (!_input.sprint)
                 {
                     _character.IsSprinting = false;
-                    _sprintCooldownTimer = SprintCooldown; 
+                    if (_wasRunningBeforeSprint)
+                    {
+                        _character.IsRunning = true;
+                        _wasRunningBeforeSprint = false;
+                    }
+                    _sprintCooldownTimer = SprintCooldown;
+                    return;
                 }
             }
         }

@@ -1,15 +1,14 @@
 ﻿using Gameplay.GameplayObjects.Items;
-using LitJson;
 using Netcode;
 using System.Collections.Generic;
 using Unity.Netcode;
-using UnityEditor.Rendering;
 using UnityEngine;
 using UnityEngine.Animations.Rigging;
 using UnityEngine.Rendering.UI;
 using UnityEngine.TextCore.Text;
 using UnityEngine.Windows;
 using Utility;
+using Managers;
 
 namespace StarterAssets
 {
@@ -61,7 +60,21 @@ namespace StarterAssets
         private Vector3 _aimTarget=Vector3.zero;public Vector3 AimTarget { get => _aimTarget; set => _aimTarget = value; }
         
         private float _health = 100f;public float Health { get => _health; }
-        private ulong _clientID = 0; public ulong ClientID { get => _clientID; set => _clientID = value; }
+        private ulong _clientID = 0;
+        private bool _hasClientId = false;
+        public ulong ClientID
+        {
+            get => _clientID;
+            set
+            {
+                if (_hasClientId && _clientID == value) return;
+                ulong oldId = _clientID;
+                bool hadOld = _hasClientId;
+                _clientID = value;
+                _hasClientId = true;
+                WorldRegistry.UpdateCharacterClientId(this, hadOld, oldId, _clientID);
+            }
+        }
         private bool _isInitialized = false; public bool IsInitialized { get => _isInitialized; set => _isInitialized = value; }
         private bool _componentsInitialized = false;
         private float _moveSpeed = 0f;public float MoveSpeed { get=>_moveSpeed; set => _moveSpeed = value; }
@@ -70,74 +83,28 @@ namespace StarterAssets
         private Vector2 _aimedMoveSpeed=Vector2.zero;
         private bool _lastAiming = false;
         private Vector2 _lastAimedMoveSpeed=Vector2.zero ;
+        private CharacterNetState _lastSentNetState;
+        [Header("Net Sync Throttle")]
+        [SerializeField] private float netSendInterval = 0.1f;
+        [SerializeField] private float aimTargetEpsilon = 0.02f;
+        [SerializeField] private float aimedMoveEpsilon = 0.01f;
+        [SerializeField] private float moveSpeedEpsilon = 0.02f;
+        private float _nextNetSendTime = 0f;
 
         public static Character LocalPlayer = null;
         private NetworkObject _networkObject=null;
 
-        [System.Serializable]
-        public struct Data
-        {
-            public float Health;
-            public Dictionary<string,(string, int)> Items;
-            public List<string> ItemsId;
-            public List<string> EquippedIds;
-        }
-
-        public Data GetData() {
-            Data data = new Data();
-
-            data.Health = _health;
-            data.Items = new Dictionary<string,(string, int)>();
-            data.ItemsId = new List<string>();
-            data.EquippedIds = new List<string>();
-
-            for (int i = 0; i < _items.Count; i++)
-            {
-                if (_items[i] == null)
-                {
-                    continue;
-                }
-
-                int value = _items[i].GetCount();
-
-                data.Items.Add(i.ToString(),(_items[i].Id,value));
-                data.ItemsId.Add(_items[i].NetworkId);
-
-                if(_weaponToEquip!=null)
-                {
-                    if (_items[i] == _weaponToEquip)
-                    {
-                        data.EquippedIds.Add(_weaponToEquip.NetworkId);
-                        for (int j = 0; j < _items.Count; j++)
-                        {
-                            if (_items[i] != null && _items[i].GetType() == typeof(Ammo) && _weaponToEquip.AmmoID == _items[i].Id)
-                            {
-                                data.EquippedIds.Add(_items[i].NetworkId);
-                                break;
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    if (CurrentWeapon != null && _items[i] == CurrentWeapon)
-                    {
-                        data.EquippedIds.Add(_items[i].NetworkId);
-                    }
-                    else if (CurrentAmmo != null && _items[i] == CurrentAmmo)
-                    {
-                        data.EquippedIds.Add(_items[i].NetworkId);
-                    }
-                }
-                
-
-            }
-
-            return data;
-        }
         private void Awake()
         {
             InitializeComponents();
+        }
+        private void OnEnable()
+        {
+            WorldRegistry.RegisterCharacter(this);
+        }
+        private void OnDisable()
+        {
+            WorldRegistry.UnregisterCharacter(this);
         }
 
 
@@ -170,7 +137,29 @@ namespace StarterAssets
             _rigManager = GetComponent<RigManager>();
             _fallTimeoutDelta = FallTimeout;
             _networkObject = GetComponent<NetworkObject>();
-            _networkObject.DontDestroyWithOwner = false;
+            if (_networkObject != null)
+            {
+                _networkObject.DontDestroyWithOwner = false;
+            }
+        }
+        private void EnsureOwnershipSetup()
+        {
+            if (IsOwner)
+            {
+                Tools.SetLayerMask(transform, LayerMask.NameToLayer("LocalPlayer"));
+                if (LocalPlayer == null || LocalPlayer == this)
+                {
+                    LocalPlayer = this;
+                }
+            }
+            else
+            {
+                Tools.SetLayerMask(transform, LayerMask.NameToLayer("NetworkPlayer"));
+                if (LocalPlayer == this)
+                {
+                    LocalPlayer = null;
+                }
+            }
         }
         public void InitializeServer(Dictionary<string, (string, int)> items,List<string> itemsId,List<string> equippedIds,ulong clientID)
         {
@@ -180,108 +169,157 @@ namespace StarterAssets
             }
             _isInitialized = true;
             InitializeComponents();
-            _clientID = clientID;
+            ClientID = clientID;
             Tools.SetLayerMask(transform, LayerMask.NameToLayer("NetworkPlayer"));
             _Initialize(items, itemsId,equippedIds);
         }
         [ClientRpc]
-        public void InitializeClientRpc(string itemsJson,string itemIdJson,string equippedJson,string itemsOnGroundJson,ulong clientID)
+        public void InitializeClientRpc(Managers.SessionManager.CharacterInitNetData initData, Managers.SessionManager.ItemStateNetData[] itemsOnGround, ulong clientID)
         {
             if (_isInitialized)
             {
+                InitializeComponents();
+                ClientID = clientID;
+                EnsureOwnershipSetup();
+                if (itemsOnGround != null && itemsOnGround.Length > 0)
+                {
+                    InitializeItemsOnGround(itemsOnGround);
+                }
                 return;
             }
             _isInitialized = true;
             InitializeComponents();
-            _clientID= clientID;
-            if (IsOwner)
+            ClientID = clientID;
+            EnsureOwnershipSetup();
+            List<string> itemsId = new List<string>();
+            List<string> equippedIds = new List<string>();
+            Dictionary<string, (string, int)> items = new Dictionary<string, (string, int)>();
+
+            if (initData.Items != null)
             {
-                Tools.SetLayerMask(transform, LayerMask.NameToLayer("LocalPlayer"));
-                LocalPlayer = this;
+                for (int i = 0; i < initData.Items.Length; i++)
+                {
+                    itemsId.Add(initData.Items[i].NetworkId);
+                    items.Add(i.ToString(), (initData.Items[i].ItemId, initData.Items[i].Count));
+                }
             }
-            else
-                Tools.SetLayerMask(transform, LayerMask.NameToLayer("NetworkPlayer"));
-            Dictionary<string, (string, int)> items = LitJson.JsonMapper.ToObject<Dictionary<string, (string, int)>>(itemsJson);
-            List<string> itemsId = LitJson.JsonMapper.ToObject<List<string>>(itemIdJson);
-            List<string> equippedIds=JsonMapper.ToObject<List<string>>(equippedJson);
-            List<Item.Data> itemsOnGround=JsonMapper.ToObject<List<Item.Data>>(itemsOnGroundJson);
+            if (initData.EquippedIds != null)
+            {
+                equippedIds.AddRange(initData.EquippedIds);
+            }
+
             InitializeItemsOnGround(itemsOnGround);
-            if(items!=null&&itemsId!=null)
+            if (items.Count > 0 && itemsId.Count > 0)
             {
                 _Initialize(items, itemsId, equippedIds);
             }
         }
 
-        private void InitializeItemsOnGround(List<Item.Data> itemsOnGround)
+        private void InitializeItemsOnGround(Managers.SessionManager.ItemStateNetData[] itemsOnGround)
         {
-            Item[] Items=FindObjectsByType<Item>(FindObjectsInactive.Exclude,FindObjectsSortMode.None);
-            List<Item> itemsOnGroundInScene=new List<Item>();
-            if (Items != null)
+            List<Item> itemsOnGroundInScene = new List<Item>();
+            foreach (var item in WorldRegistry.Items)
             {
-                for (int i = 0; i < Items.Length; i++)
+                if (item != null && item.transform.parent == null)
                 {
-                    if (Items[i].transform.parent == null)
-                    {
-                        itemsOnGroundInScene.Add(Items[i]);
-                    }
+                    itemsOnGroundInScene.Add(item);
                 }
+            }
+            List<Managers.SessionManager.ItemStateNetData> itemsOnGroundList = new List<Managers.SessionManager.ItemStateNetData>();
+            if (itemsOnGround != null)
+            {
+                itemsOnGroundList.AddRange(itemsOnGround);
             }
             for (int i = 0; i < itemsOnGroundInScene.Count; i++) {
                 bool matched = false;
-                for (int j = 0; j < itemsOnGround.Count; j++)
+                int matchIndex = -1;
+                if (!string.IsNullOrEmpty(itemsOnGroundInScene[i].NetworkId))
                 {
-                    if (itemsOnGroundInScene[i].Id == itemsOnGround[j].Id)
+                    for (int j = 0; j < itemsOnGroundList.Count; j++)
                     {
-                        itemsOnGroundInScene[i].NetworkId= itemsOnGround[j].NetworkId;
-                        itemsOnGroundInScene[i].transform.position=new Vector3(itemsOnGround[j].Position[0],itemsOnGround[j].Position[1],itemsOnGround[j].Position[2]);
-                        itemsOnGroundInScene[i].transform.eulerAngles=new Vector3(itemsOnGround[j].Rotation[0],itemsOnGround[j].Rotation[1],itemsOnGround[j].Rotation[2]);
-                        itemsOnGroundInScene[i].SetCount(itemsOnGround[j].Value);
-                        itemsOnGroundInScene[i].SetOnGroundStatus(true);
-                        itemsOnGround.RemoveAt(j);
-                        matched=true;
-                        break;
+                        if (itemsOnGroundInScene[i].NetworkId == itemsOnGroundList[j].NetworkId)
+                        {
+                            matchIndex = j;
+                            break;
+                        }
                     }
+                }
+                if (matchIndex < 0)
+                {
+                    for (int j = 0; j < itemsOnGroundList.Count; j++)
+                    {
+                        if (string.IsNullOrEmpty(itemsOnGroundList[j].NetworkId) && itemsOnGroundInScene[i].Id == itemsOnGroundList[j].Id)
+                        {
+                            matchIndex = j;
+                            break;
+                        }
+                    }
+                }
+                if (matchIndex >= 0)
+                {
+                    var data = itemsOnGroundList[matchIndex];
+                    itemsOnGroundInScene[i].NetworkId = data.NetworkId;
+                    itemsOnGroundInScene[i].transform.position = data.Position;
+                    itemsOnGroundInScene[i].transform.eulerAngles = data.Rotation;
+                    itemsOnGroundInScene[i].SetCount(data.Count);
+                    itemsOnGroundInScene[i].SetOnGroundStatus(true);
+                    itemsOnGroundList.RemoveAt(matchIndex);
+                    matched = true;
                 }
                 if (!matched)
                 {
                     Destroy(itemsOnGroundInScene[i].gameObject);
                 }
             }
-            for (int i = 0; i < itemsOnGround.Count; i++)
+            for (int i = 0; i < itemsOnGroundList.Count; i++)
             {
-                Item item = PrefabManager.Instance.GetItemInstance(itemsOnGround[i].Id);
+                Item item = PrefabManager.Instance.GetItemInstance(itemsOnGroundList[i].Id);
                 if (item != null)
                 {
-                    item.NetworkId = itemsOnGround[i].NetworkId;
+                    item.NetworkId = itemsOnGroundList[i].NetworkId;
                     item.Initialize();
                     item.SetOnGroundStatus(true);
-                    item.SetCount(itemsOnGround[i].Value);
-                    item.transform.position = new Vector3(itemsOnGround[i].Position[0], itemsOnGround[i].Position[1], itemsOnGround[i].Position[2]);
-                    item.transform.eulerAngles = new Vector3(itemsOnGround[i].Rotation[0], itemsOnGround[i].Rotation[1], itemsOnGround[i].Rotation[2]);
+                    item.SetCount(itemsOnGroundList[i].Count);
+                    item.transform.position = itemsOnGroundList[i].Position;
+                    item.transform.eulerAngles = itemsOnGroundList[i].Rotation;
                 }
             }
         }
 
         [ClientRpc]
-        public void InitializeClientRpc(string dataJson, ulong clientID,ClientRpcParams rpcParams=default)
+        public void InitializeClientRpc(Managers.SessionManager.CharacterInitNetData data, ulong clientID,ClientRpcParams rpcParams=default)
         {
             if (_isInitialized)
             {
+                InitializeComponents();
+                ClientID = clientID;
+                EnsureOwnershipSetup();
                 return;
             }
             _isInitialized = true;
             InitializeComponents();
-            _clientID = clientID;
-            if (IsOwner)
-            {
-                Tools.SetLayerMask(transform, LayerMask.NameToLayer("LocalPlayer"));
-                LocalPlayer = this;
-            }
-            else
-                Tools.SetLayerMask(transform, LayerMask.NameToLayer("NetworkPlayer"));
-            Data data=JsonMapper.ToObject<Data>(dataJson);
+            ClientID = clientID;
+            EnsureOwnershipSetup();
             _health = data.Health;
-            _Initialize(data.Items,data.ItemsId, data.EquippedIds);
+
+            List<string> itemsId = new List<string>();
+            List<string> equippedIds = new List<string>();
+            Dictionary<string, (string, int)> items = new Dictionary<string, (string, int)>();
+
+            if (data.Items != null)
+            {
+                for (int i = 0; i < data.Items.Length; i++)
+                {
+                    itemsId.Add(data.Items[i].NetworkId);
+                    items.Add(i.ToString(), (data.Items[i].ItemId, data.Items[i].Count));
+                }
+            }
+            if (data.EquippedIds != null)
+            {
+                equippedIds.AddRange(data.EquippedIds);
+            }
+
+            _Initialize(items, itemsId, equippedIds);
             if (_health <= 0)
             {
                 HealthCheck();
@@ -294,34 +332,54 @@ namespace StarterAssets
             GroundedCheck();
             FreeFall();
 
+            if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+            {
+                RecordLagCompSnapshot();
+            }
+
             if (_shots.Count > 0 && !IsOwner)
             {
-                if (CurrentWeapon != null && CurrentWeapon.NetworkId == _shots[0])
-                {
-                    Debug.Log("character shoot");
-                    bool shoot = Shoot();
-                    if (shoot)
-                    {
-                        _shots.RemoveAt(0);
-                    }
-                }
-                else
+                PendingShot shot = _shots[0];
+                if (TryPlayRemoteShotFx(shot, "queue"))
                 {
                     _shots.RemoveAt(0);
                 }
+                else
+                {
+                    shot.RetryCount++;
+                    bool expired = (Time.time - shot.EnqueuedAt) > 1.5f || shot.RetryCount > 90;
+                    if (expired)
+                    {
+                        _shots.RemoveAt(0);
+                        NetLog.Write($"[Combat] RemoteShotDropped seq={shot.ShotSequence} weapon={shot.WeaponId} retries={shot.RetryCount}");
+                    }
+                    else
+                    {
+                        _shots[0] = shot;
+                    }
+                }
             }
             IsArmed = CurrentWeapon != null;
-            _playerAnimation.SetArmed(_isArmed);
-            _playerAnimation.SetAim(_isAiming);
+            if (_playerAnimation != null)
+            {
+                _playerAnimation.SetArmed(_isArmed);
+                _playerAnimation.SetAim(_isAiming);
+            }
             float targetWeight = IsSwitchingWeapon || (_isArmed && (_isAiming || IsReloading)) ? 1f : 0f;
 
-            _playerAnimation.SetAimLayerWeight(targetWeight);
+            if (_playerAnimation != null)
+            {
+                _playerAnimation.SetAimLayerWeight(targetWeight);
+            }
             _aimRigWeight = Mathf.Lerp(_aimRigWeight, IsArmed &&IsAiming && !IsReloading ? 1f : 0f, Time.deltaTime * 10f);
             _leftHandWeight = Mathf.Lerp(_leftHandWeight, IsArmed && !IsSwitchingWeapon && (_isAiming || IsGrounded&& CurrentWeapon.GetWeaponType == Weapon.WeaponType.TwoHanded) && !IsReloading ? 1f : 0f, Time.deltaTime * 10f);
 
-            _rigManager.AimWeight = _aimRigWeight;
-            _rigManager.LeftHandWeight = _leftHandWeight;
-            _rigManager.AimTarget = _aimTarget;
+            if (_rigManager != null)
+            {
+                _rigManager.AimWeight = _aimRigWeight;
+                _rigManager.LeftHandWeight = _leftHandWeight;
+                _rigManager.AimTarget = _aimTarget;
+            }
 
             _moveSpeedBlend=Mathf.Lerp(_moveSpeedBlend,_moveSpeed,Time.deltaTime*10f);
             if (_moveSpeedBlend < 0.01f)
@@ -346,37 +404,45 @@ namespace StarterAssets
               _aimedMoveSpeed=new Vector2(deltaPosition.x, deltaPosition.z)*_speedAnimationMultiplier;
             }
             _aimedMovingAnimationInput = Vector2.Lerp(_aimedMovingAnimationInput,_aimedMoveSpeed, Time.deltaTime * 10f);
-            _playerAnimation.SetAimMoveSpeed(_aimedMovingAnimationInput.x, _aimedMovingAnimationInput.y);
-            _playerAnimation.SetSpeed(_moveSpeedBlend);
+            if (_playerAnimation != null)
+            {
+                _playerAnimation.SetAimMoveSpeed(_aimedMovingAnimationInput.x, _aimedMovingAnimationInput.y);
+                _playerAnimation.SetSpeed(_moveSpeedBlend);
+            }
 
             if (IsOwner)
             {
-                if (_isAiming != _lastAiming)
+                bool aimChanged = _isAiming != _lastAiming;
+                bool timeReady = Time.time >= _nextNetSendTime;
+                if (aimChanged || timeReady)
                 {
-                    OnAimingChangedServerRpc(_isAiming);
-                    _lastAiming = _isAiming;
-                }
-                if (_aimTarget != _lastAimTarget)
-                {
-                    OnAimTargetChangedServerRpc(_aimTarget);
-                    _lastAimTarget = _aimTarget;
-                }
-                if (_isAiming)
-                {
-                    if (_aimedMoveSpeed != _lastAimedMoveSpeed)
+                    CharacterNetState state = new CharacterNetState
                     {
-                        OnAimingMoveChangedServerRpc(_aimedMoveSpeed);
+                        IsAiming = _isAiming,
+                        AimTarget = _aimTarget,
+                        AimedMoveSpeed = _aimedMoveSpeed,
+                        MoveSpeed = _moveSpeed
+                    };
+
+                    bool aimTargetChanged = (_aimTarget - _lastSentNetState.AimTarget).sqrMagnitude > aimTargetEpsilon * aimTargetEpsilon;
+                    bool aimedMoveChanged = (_aimedMoveSpeed - _lastSentNetState.AimedMoveSpeed).sqrMagnitude > aimedMoveEpsilon * aimedMoveEpsilon;
+                    bool moveSpeedChanged = Mathf.Abs(_moveSpeed - _lastSentNetState.MoveSpeed) > moveSpeedEpsilon;
+                    bool aimingChanged = _isAiming != _lastSentNetState.IsAiming;
+
+                    if (aimingChanged || aimTargetChanged || aimedMoveChanged || moveSpeedChanged)
+                    {
+                        SubmitNetStateServerRpc(state);
+                        _lastSentNetState = state;
+                        _lastAiming = _isAiming;
+                        _lastAimTarget = _aimTarget;
                         _lastAimedMoveSpeed = _aimedMoveSpeed;
-                    }
-                }
-                else
-                {
-                    if (_moveSpeed != _lastMoveSpeed)
-                    {
-                        OnMoveSpeedChangedServerRpc(_moveSpeed);
                         _lastMoveSpeed = _moveSpeed;
                     }
+
+                    _nextNetSendTime = Time.time + netSendInterval;
                 }
+
+                FlushShootRequests();
             }
 
             ApplyMovementCorrection();
@@ -402,13 +468,20 @@ private void LateUpdate()
             InitializeComponents();
             if (items != null)
             {
-                int i = 0;
+                List<string> orderedKeys = new List<string>(items.Keys);
+                orderedKeys.Sort((a, b) =>
+                {
+                    int.TryParse(a, out int ai);
+                    int.TryParse(b, out int bi);
+                    return ai.CompareTo(bi);
+                });
                 int equippedWeaponIndex= -1;
                 int equippedAmmoIndex = -1;
-                foreach (var itemEntry in items) 
+                for (int idx = 0; idx < orderedKeys.Count; idx++)
                 {
-                    string itemID = itemEntry.Value.Item1;
-                    int count = itemEntry.Value.Item2;
+                    var itemEntry = items[orderedKeys[idx]];
+                    string itemID = itemEntry.Item1;
+                    int count = itemEntry.Item2;
 
                     if (count > 0)
                     {
@@ -416,7 +489,10 @@ private void LateUpdate()
                         if(newItem==null)continue;
                         newItem.Initialize();
                         newItem.SetOnGroundStatus(false);
-                        newItem.NetworkId = itemsId[i];
+                        if (itemsId != null && idx < itemsId.Count)
+                        {
+                            newItem.NetworkId = itemsId[idx];
+                        }
                         newItem.SetCount(count);
                         if (newItem != null)
                             {
@@ -427,19 +503,18 @@ private void LateUpdate()
                                     newItem.transform.localEulerAngles = newWeapon.RightHandRotation;
                                 if (equippedIds.Contains(newItem.NetworkId)||equippedWeaponIndex<0)
                                     {
-                                        equippedWeaponIndex =i;
+                                        equippedWeaponIndex = idx;
                                     }
                                 }
                                 else if (newItem is Ammo newAmmo)
                                 {
                                 if (equippedIds.Contains(newItem.NetworkId))
                                 {
-                                    equippedAmmoIndex = i;
+                                    equippedAmmoIndex = idx;
                                 }
                                 }                              
                                 newItem.gameObject.SetActive(false);
                                 _items.Add(newItem);
-                            i++;
                             }
                     }
                 }
@@ -632,8 +707,15 @@ private void LateUpdate()
         }
 
         [ServerRpc]
-        public void EquipWeaponServerRpc(string networkID)
+        public void EquipWeaponServerRpc(string networkID, ServerRpcParams serverRpcParams = default)
         {
+            if (!InventoryOps.ValidateOwnerSender(serverRpcParams.Receive.SenderClientId, OwnerClientId, "Equip")) return;
+            Item item = InventoryOps.FindItemByNetworkId(_items, networkID);
+            if (item == null || item is Weapon == false)
+            {
+                InventoryOps.LogWarning($"Equip invalid weapon. netId={networkID}");
+                return;
+            }
             EquipWeaponSync(networkID);
             EquipWeaponClientRpc(networkID);
         }
@@ -692,8 +774,14 @@ private void LateUpdate()
             }
         }
         [ServerRpc]
-        public void HolsterWeaponServerRpc(string networkID)
+        public void HolsterWeaponServerRpc(string networkID, ServerRpcParams serverRpcParams = default)
         {
+            if (!InventoryOps.ValidateOwnerSender(serverRpcParams.Receive.SenderClientId, OwnerClientId, "Holster")) return;
+            if (CurrentWeapon == null || CurrentWeapon.NetworkId != networkID)
+            {
+                InventoryOps.LogWarning($"Holster invalid weapon. netId={networkID}");
+                return;
+            }
             HolsterWeaponSync(networkID);
             HolsterWeaponClientRpc(networkID);
         }
@@ -826,7 +914,10 @@ public void OnEquip() {
                 //_playerAnimation?.SetJump(false);
                 //_animator.SetBool("Jump", false);
                 //_playerAnimation?.SetFreeFall(false);
-                _animator.SetBool("FreeFall", false);
+                if (_animator != null)
+                {
+                    _animator.SetBool("FreeFall", false);
+                }
             }
             else
             {
@@ -838,7 +929,10 @@ public void OnEquip() {
                 {
                     // update animator if using character
                     //_playerAnimation?.SetFreeFall(true);
-                    _animator.SetBool("FreeFall", true);
+                    if (_animator != null)
+                    {
+                        _animator.SetBool("FreeFall", true);
+                    }
                 }
 
             }
@@ -848,87 +942,97 @@ private bool _isPickingItem = false;
         public void PickupItem(string networkId)
         {
             if (_isPickingItem) return;
+            if (string.IsNullOrEmpty(networkId))
+            {
+                InventoryOps.LogInfo("Pickup empty networkId.");
+                return;
+            }
             _isPickingItem = true;
             PickupItemServerRpc(networkId);
         }
         [ServerRpc]
         private void PickupItemServerRpc(string networkId,ServerRpcParams serverRpcParams = default)
         {
-            bool success = false;
-            Item[] items = FindObjectsByType<Item>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-            Item merge=null;
+            if (!InventoryOps.ValidateOwnerSender(serverRpcParams.Receive.SenderClientId, OwnerClientId, "Pickup")) return;
+            Item merge = null;
+            Item targetItem = null;
+            WorldRegistry.TryResolveItemByNetworkId(networkId, out targetItem);
 
-            if (items != null)
+            if (!InventoryOps.IsValidPickupRequest(targetItem, networkId))
             {
-                for(int i=0; i<items.Length; i++)
-                {
-                    if (items[i].transform.parent == null && items[i].NetworkId == networkId)
-                    {
-                        if (items[i].GetType() == typeof(Ammo))
-                        {
-                            for(int j=0;j<_items.Count;j++)
-                            {
-                                if (_items[j].Id == items[i].Id)
-                                {
-                                    merge=_items[j];
-                                    break;
-                                }
-                            }
-                        }
-                        AddItemToInventoryLocally(items[i],merge);
-                        success = true;
-                        break;
-                    }
-                }
+                InventoryOps.LogWarning($"Pickup invalid request. netId={networkId} clientId={serverRpcParams.Receive.SenderClientId}");
+                SendPickupResult(false, networkId, "", 0, 0, serverRpcParams.Receive.SenderClientId);
+                return;
             }
-            if (success)
-            {
-                PickupItemClientRpc(networkId, true, merge !=null?merge.NetworkId:"");
-            }
-            else
-            {
-                ulong[] target = new ulong[1];
-                target[0] = serverRpcParams.Receive.SenderClientId;
-                ClientRpcParams clientRpcParams = default;
-                clientRpcParams.Send.TargetClientIds = target;
-                PickupItemClientRpc(networkId,false,"", clientRpcParams);
-            }
+
+            merge = InventoryOps.TryResolvePickupMerge(_items, string.Empty, targetItem);
+            int pickedCount = Mathf.Max(0, targetItem.GetCount());
+            AddItemToInventoryLocally(targetItem, merge);
+            int mergedCountAfter = merge != null ? Mathf.Max(0, merge.GetCount()) : 0;
+            SendPickupResult(true, networkId, merge != null ? merge.NetworkId : "", pickedCount, mergedCountAfter, serverRpcParams.Receive.SenderClientId);
         }
-        [ClientRpc]
-        private void PickupItemClientRpc(string networkId,bool success,string mergeNetworkId,ClientRpcParams clientRpcParams = default)
+        private void SendPickupResult(bool success, string networkId, string mergeNetworkId, int pickedCount, int mergedCountAfter, ulong targetClientId)
         {
             if (success)
             {
-                bool founded = false;
-                Item[] items = FindObjectsByType<Item>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-                if (items != null)
+                InventoryOps.LogInfo($"Pickup success. netId={networkId} clientId={targetClientId}");
+                PickupItemClientRpc(networkId, true, mergeNetworkId, pickedCount, mergedCountAfter);
+                return;
+            }
+            ulong[] target = new ulong[1];
+            target[0] = targetClientId;
+            ClientRpcParams clientRpcParams = default;
+            clientRpcParams.Send.TargetClientIds = target;
+            PickupItemClientRpc(networkId, false, "", 0, 0, clientRpcParams);
+        }
+
+        private void NotifyDropResult(List<Managers.SessionManager.TransferRequest> droppedItems, List<Managers.SessionManager.SplitItemNetData> splitItems, ulong clientId)
+        {
+            if (droppedItems == null || droppedItems.Count == 0)
+            {
+                InventoryOps.LogInfo($"Drop no valid items dropped. clientId={clientId}");
+                return;
+            }
+            DropItemsClientRpc(droppedItems.ToArray(), splitItems != null ? splitItems.ToArray() : new Managers.SessionManager.SplitItemNetData[0]);
+            InventoryOps.LogInfo($"Drop success. clientId={clientId} count={droppedItems.Count}");
+        }
+        [ClientRpc]
+        private void PickupItemClientRpc(string networkId,bool success,string mergeNetworkId, int pickedCount, int mergedCountAfter, ClientRpcParams clientRpcParams = default)
+        {
+            if (success)
+            {
+                Item targetItem = null;
+                WorldRegistry.TryResolveItemByNetworkId(networkId, out targetItem);
+                if (InventoryOps.IsWorldPickupCandidate(targetItem))
                 {
-                    for (int i = 0; i < items.Length; i++)
+                    Item merge = InventoryOps.TryResolvePickupMerge(_items, mergeNetworkId, targetItem);
+                    AddItemToInventoryLocally(targetItem, merge);
+                    if (merge != null && mergedCountAfter > 0)
                     {
-                        if (items[i].transform.parent == null && items[i].NetworkId == networkId)
+                        merge.SetCount(mergedCountAfter);
+                    }
+                    else
+                    {
+                        Item added = InventoryOps.FindItemByNetworkId(_items, networkId);
+                        if (added != null && pickedCount > 0)
                         {
-                            founded = true;
-                            Item merge = null;
-                            if (!string.IsNullOrEmpty(mergeNetworkId))
-                            {
-                                for(int j=0;j<_items.Count;j++)
-                                {
-                                    if (_items[j].NetworkId == mergeNetworkId)
-                                    {
-                                        merge = _items[j];
-                                        break;
-                                    }
-                                }
-                            }
-                            AddItemToInventoryLocally(items[i],merge);
-                            break;
+                            added.SetCount(pickedCount);
                         }
                     }
+                    _isPickingItem=false;
+                    return;
                 }
-                if(! founded)
+                Item existingItem = InventoryOps.FindItemByNetworkId(_items, networkId);
+                if (existingItem != null)
                 {
-
+                    if (pickedCount > 0)
+                    {
+                        existingItem.SetCount(pickedCount);
+                    }
+                    _isPickingItem = false;
+                    return;
                 }
+                InventoryOps.LogWarning($"Pickup failed on client. netId={networkId}");
             }
             _isPickingItem=false;
         }
@@ -999,118 +1103,92 @@ private bool _isPickingItem = false;
 
         public void DropItems(Dictionary<Item,int> items)
         {
-            Dictionary<string, int> serializeableItems = new Dictionary<string, int>();
-            foreach(var item in items)
+            List<Managers.SessionManager.TransferRequest> requests = InventoryOps.BuildTransferRequests(items, _items);
+            if(requests.Count == 0)
             {
-                if (item.Value <= 0 && item.Value.GetType() == typeof(Ammo))
+                InventoryOps.LogInfo("Drop empty request list.");
+                return;
+            }
+            DropItemsServerRpc(requests.ToArray());
+        }
+        [ServerRpc]
+        private void DropItemsServerRpc(Managers.SessionManager.TransferRequest[] items, ServerRpcParams serverRpcParams = default)
+        {
+            if (!InventoryOps.ValidateOwnerSender(serverRpcParams.Receive.SenderClientId, OwnerClientId, "Drop")) return;
+            if (items == null || items.Length == 0)
+            {
+                InventoryOps.LogWarning($"Drop empty or null server request. clientId={serverRpcParams.Receive.SenderClientId}");
+                return;
+            }
+            List<Managers.SessionManager.TransferRequest> droppedItems = new List<Managers.SessionManager.TransferRequest>();
+            List<Managers.SessionManager.SplitItemNetData> splitItems = new List<Managers.SessionManager.SplitItemNetData>();
+            foreach (var item in items)
+            {
+                if (!InventoryOps.TryGetValidItemForTransfer(_items, item.NetworkId, item.Count, out Item source))
+                {
+                    InventoryOps.LogWarning($"Drop invalid request. netId={item.NetworkId} count={item.Count} clientId={serverRpcParams.Receive.SenderClientId}");
+                    continue;
+                }
+                if (!InventoryOps.IsOwnedByCharacter(source, this))
+                {
+                    InventoryOps.LogWarning($"Drop ownership mismatch. netId={item.NetworkId} itemId={source.Id} clientId={serverRpcParams.Receive.SenderClientId}");
+                    continue;
+                }
+                if (!InventoryOps.TryTransferItemWithSource(
+                        source,
+                        _items,
+                        item.Count,
+                        transform,
+                        out Item movedItem,
+                        out _,
+                        out Item splitItem,
+                        out int movedCount))
                 {
                     continue;
                 }
-                if (item.Key != null && _items.Contains(item.Key))
+
+                if (splitItem != null)
                 {
-                    serializeableItems.Add(item.Key.NetworkId, item.Value);
-                }
-            }
-            if(serializeableItems.Count > 0)
-            {
-                string itemsJson=JsonMapper.ToJson(serializeableItems);
-                DropItemsServerRpc(itemsJson);
-            }
-        }
-        [ServerRpc]
-        private void DropItemsServerRpc(string itemsJson, ServerRpcParams serverRpcParams = default)
-        {
-            Dictionary<string, int> items = JsonMapper.ToObject<Dictionary<string, int>>(itemsJson);
-            Dictionary<string, int> droppedItems = new Dictionary<string, int>();
-            Dictionary<string, (string, int)> splitItems = new Dictionary<string, (string, int)>();
-            foreach (var item in items)
-            {
-                for (int i = 0; i < _items.Count; i++)
-                {
-                    if (item.Key == _items[i].NetworkId)
+                    AddItemToInventoryLocally(splitItem);
+                    splitItems.Add(new Managers.SessionManager.SplitItemNetData
                     {
-                        int count = item.Value;
-                        int remained = 0;
-                        int c = 0;
-                        if (_items[i].GetType() == typeof(Weapon))
-                        {
-                            count = ((Weapon)_items[i]).AmmoCount;
-                        }
-                        else
-                        {
-                            c = _items[i].GetCount();
-                            if (count <= 0)
-                            {
-                                break;
-                            }
-                            else if (c < count)
-                            {
-                                count = c;
-                            }
-                            else if (c > count)
-                            {
-                                remained = c - count;
-                                c = count;
-                                _items[i].SetCount(c);
-                            }
-                        }
-                        if (remained > 0)
-                        {
-                            Item prefab = PrefabManager.Instance.GetItemPrefab(_items[i].Id);
-                            if (prefab != null)
-                            {
-                                Item splitItem = Instantiate(prefab, transform);
-                                splitItem.NetworkId = System.Guid.NewGuid().ToString();
-                                splitItem.SetCount(remained);
-                                AddItemToInventoryLocally(splitItem);
-                                splitItems.Add(splitItem.NetworkId, (_items[i].Id, remained));
-                            }
-                            else
-                            {
-                                break;
-                            }
-                        }
-                        _DropItem(_items[i]);
-                        droppedItems.Add(item.Key, count);
-                        break;
-                    }
+                        Id = splitItem.Id,
+                        NetworkId = splitItem.NetworkId,
+                        Count = splitItem.GetCount()
+                    });
                 }
+
+                _DropItem(movedItem);
+                droppedItems.Add(new Managers.SessionManager.TransferRequest
+                {
+                    NetworkId = item.NetworkId,
+                    Count = movedCount
+                });
             }
-            if (droppedItems.Count > 0)
-            {
-                string droppedItemsJson = JsonMapper.ToJson(droppedItems);
-                string splitItemsJson = JsonMapper.ToJson(splitItems);
-                DropItemsClientRpc(droppedItemsJson, splitItemsJson);
-            }
+            NotifyDropResult(droppedItems, splitItems, serverRpcParams.Receive.SenderClientId);
         }
         [ClientRpc]
-        private void DropItemsClientRpc(string droppedItemsJson,string splitItemsJson,ClientRpcParams clientRpcParams = default)
+        private void DropItemsClientRpc(Managers.SessionManager.TransferRequest[] droppedItems, Managers.SessionManager.SplitItemNetData[] splitItems, ClientRpcParams clientRpcParams = default)
         {
-            Dictionary<string,int> items=JsonMapper.ToObject<Dictionary<string,int>>(droppedItemsJson);
-            Dictionary<string,(string,int)> splitItems=JsonMapper.ToObject<Dictionary<string,(string,int)>>(splitItemsJson);
-            foreach(var item in items)
-            {
-                bool found=false;
-                for(int i=0; i<_items.Count; i++)
-                {
-                    if (_items[i].NetworkId == item.Key)
-                    {
-                        _items[i].SetCount(item.Value);
-                        _DropItem(_items[i]);
-                        found=true;
-                        break;
-                    }
-                }
-                if (!found)
-                {
+            if (droppedItems == null) droppedItems = new Managers.SessionManager.TransferRequest[0];
+            if (splitItems == null) splitItems = new Managers.SessionManager.SplitItemNetData[0];
 
+            foreach(var item in droppedItems)
+            {
+                Item target = InventoryOps.FindItemByNetworkId(_items, item.NetworkId);
+                if (target == null)
+                {
+                    InventoryOps.LogWarning($"Drop source item not found. netId={item.NetworkId}");
+                    continue;
                 }
+                target.SetCount(item.Count);
+                _DropItem(target);
             }
             foreach(var item in splitItems)
             {
-                Item splitItem = PrefabManager.Instance.GetItemInstance(item.Value.Item1,transform);
-                splitItem.NetworkId = item.Key;
-                splitItem.SetCount(item.Value.Item2);
+                Item splitItem = PrefabManager.Instance.GetItemInstance(item.Id,transform);
+                splitItem.NetworkId = item.NetworkId;
+                splitItem.SetCount(item.Count);
                 AddItemToInventoryLocally(splitItem);
             }
         }

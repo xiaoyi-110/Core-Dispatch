@@ -10,11 +10,27 @@ namespace Gameplay.GameplayObjects.Items
     {
         [SerializeField] private string id = "";public string Id { get { return id; } }
         public int Count { get; set; } = 0;
-        private string _networkId = "";public string NetworkId { get=>_networkId; set =>_networkId = value; } 
+        private string _networkId = "";
+        public string NetworkId
+        {
+            get => _networkId;
+            set
+            {
+                if (_networkId == value) return;
+                string oldId = _networkId;
+                _networkId = value;
+                WorldRegistry.UpdateItemNetworkId(this, oldId, _networkId);
+            }
+        }
 
         private Rigidbody _rigidbody=null;
         private Collider _collider=null;
         private Vector3 _lastPosition = Vector3.zero;
+        private Quaternion _lastRotation = Quaternion.identity;
+        [SerializeField] private float syncInterval = 0.2f;
+        [SerializeField] private float positionEpsilon = 0.01f;
+        [SerializeField] private float rotationEpsilon = 0.5f;
+        private float _nextSyncTime = 0f;
         private bool _serverInitialized = false;
         private bool _canBePickUp = false;public bool CanBePickUp { get => _canBePickUp; set => _canBePickUp = value; }
         private bool _initialized = false;
@@ -51,6 +67,14 @@ namespace Gameplay.GameplayObjects.Items
         {
             Initialize();   
         }
+        protected virtual void OnEnable()
+        {
+            WorldRegistry.RegisterItem(this);
+        }
+        protected virtual void OnDisable()
+        {
+            WorldRegistry.UnregisterItem(this);
+        }
 
         protected virtual void Start()
         {
@@ -63,7 +87,7 @@ namespace Gameplay.GameplayObjects.Items
 
         public void ServerInitialize()
         {
-            if (NetworkManager.Singleton.IsServer == false || _serverInitialized)
+            if (NetworkManager.Singleton == null || NetworkManager.Singleton.IsServer == false || _serverInitialized)
             {
                 return;
             }
@@ -80,13 +104,21 @@ namespace Gameplay.GameplayObjects.Items
 
         public virtual void Update()
         {
-            if (_canBePickUp && NetworkManager.Singleton.IsServer)
+            if (_canBePickUp && NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
             {
-                if (_lastPosition != transform.position)
+                if (Time.time < _nextSyncTime)
                 {
-                    SessionManager.Instance.UpdateItemPosition(this);
+                    return;
                 }
-                _lastPosition = transform.position;
+                bool moved = (transform.position - _lastPosition).sqrMagnitude > positionEpsilon * positionEpsilon;
+                bool rotated = Quaternion.Angle(_lastRotation, transform.rotation) > rotationEpsilon;
+                if (moved || rotated)
+                {
+                    SessionManager.Instance.QueueItemState(this);
+                    _lastPosition = transform.position;
+                    _lastRotation = transform.rotation;
+                }
+                _nextSyncTime = Time.time + syncInterval;
             }
         }
         public void Initialize()
@@ -96,6 +128,14 @@ namespace Gameplay.GameplayObjects.Items
             gameObject.tag = "Item";
             _rigidbody = GetComponent<Rigidbody>();
             _collider = GetComponent<Collider>();
+            if (_rigidbody == null)
+            {
+                _rigidbody = gameObject.AddComponent<Rigidbody>();
+            }
+            if (_collider == null)
+            {
+                _collider = gameObject.AddComponent<BoxCollider>();
+            }
             _collider.isTrigger = false;
             _rigidbody.mass = 40f;
         }
@@ -106,6 +146,7 @@ namespace Gameplay.GameplayObjects.Items
             _collider.enabled = status;
             _canBePickUp= status;
             _lastPosition = transform.position;
+            _lastRotation = transform.rotation;
         }
 
         public int GetCount()

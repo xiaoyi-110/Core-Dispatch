@@ -13,8 +13,8 @@ namespace Gameplay.GameplayObjects.Items
         }
         [SerializeField] private WeaponType weaponType = WeaponType.TwoHanded;public WeaponType GetWeaponType { get=>weaponType; }
         [SerializeField] private string ammoID = "";public string AmmoID { get => ammoID; }
-        [SerializeField] private float damage = 1f;
-        [SerializeField] private float fireRate = 0.2f;
+        [SerializeField] private float damage = 1f;public float Damage { get => damage; }
+        [SerializeField] private float fireRate = 0.2f;public float FireRate { get => fireRate; }
         [SerializeField] private int clipSize = 30;public int ClipSize { get => clipSize; }
         [SerializeField] private float handKick = 5f;public float HandKick { get => handKick; }
         [SerializeField] private float bodyKick = 5f;public float BodyKick { get => bodyKick; }
@@ -25,6 +25,7 @@ namespace Gameplay.GameplayObjects.Items
        
         [Header("References")]
         [SerializeField] private Transform muzzle = null;
+        public Transform Muzzle { get => muzzle; }
         [SerializeField] private ParticleSystem flash = null;
         [SerializeField] private Projectile projectile = null;
         private float _fireTimer = 0f;
@@ -39,15 +40,22 @@ namespace Gameplay.GameplayObjects.Items
         //{
         //    _fireTimer += Time.deltaTime;
         //}
-        public bool Shoot(StarterAssets.Character character,Vector3 target)
+        public bool Shoot(StarterAssets.Character character,Vector3 target, bool enableServerDamage = true)
         {
+            if (projectile == null || muzzle == null)
+            {
+                return false;
+            }
             float passedTime = Time.realtimeSinceStartup - _fireTimer;
             if(_ammoCount>0&&passedTime>=fireRate)
             {
                 _ammoCount--;
                 _fireTimer = Time.realtimeSinceStartup;
-                Projectile newProjectile = Instantiate(projectile, muzzle.position, Quaternion.identity);
-                newProjectile.Initialize(character, target, damage);
+                Projectile newProjectile = Projectile.Spawn(projectile, muzzle.position, Quaternion.identity);
+                if (newProjectile != null)
+                {
+                    newProjectile.Initialize(character, target, damage, enableServerDamage);
+                }
                 if (flash!=null)
                 {
                     flash.Play();
@@ -55,6 +63,30 @@ namespace Gameplay.GameplayObjects.Items
                 return true;
             }
             return false;
+        }
+
+        public bool PlayRemoteShotFx(Vector3 target)
+        {
+            if (muzzle == null)
+            {
+                return false;
+            }
+
+            if (projectile != null)
+            {
+                Projectile visualProjectile = Projectile.Spawn(projectile, muzzle.position, Quaternion.identity);
+                if (visualProjectile != null)
+                {
+                    visualProjectile.Initialize(null, target, 0f, false);
+                }
+            }
+
+            if (flash != null)
+            {
+                flash.Play();
+            }
+
+            return true;
         }
     }
 

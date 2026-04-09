@@ -1,4 +1,5 @@
 using DevelopersHub.RealtimeNetworking.Client;
+using System;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -33,6 +34,14 @@ namespace Managers
             //base.Awake();
             matchmakingStart.gameObject.SetActive(false);
             matchmakingStop.gameObject.SetActive(false);
+            if (TryGetCommandLineOverride(out SessionManager.Role role, out string ip, out ushort port))
+            {
+                SessionManager._Role = role;
+                SessionManager.Port = port;
+                SessionManager.OverrideAddress = ip;
+                DirectAwake();
+                return;
+            }
             if (Application.platform == RuntimePlatform.WindowsServer || Application.platform == RuntimePlatform.LinuxServer || Application.platform == RuntimePlatform.OSXServer)
             {
                 SessionManager._Role = SessionManager.Role.Server;
@@ -43,6 +52,67 @@ namespace Managers
                 SessionManager._Role = SessionManager.Role.Client;
                 ClientAwake();
             }
+        }
+
+        private void DirectAwake()
+        {
+            matchmakingText.text = "";
+            username.text = "";
+            matchmakingStart.gameObject.SetActive(false);
+            matchmakingStop.gameObject.SetActive(false);
+            SceneManager.LoadScene(1);
+        }
+
+        private bool TryGetCommandLineOverride(out SessionManager.Role role, out string ip, out ushort port)
+        {
+            role = SessionManager.Role.Client;
+            ip = "";
+            port = 7777;
+
+            string[] args = Environment.GetCommandLineArgs();
+            bool hasRole = false;
+            for (int i = 0; i < args.Length; i++)
+            {
+                string arg = args[i];
+                if (string.Equals(arg, "-role", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    string value = args[i + 1].ToLowerInvariant();
+                    if (value == "server")
+                    {
+                        role = SessionManager.Role.Server;
+                        hasRole = true;
+                    }
+                    else if (value == "client")
+                    {
+                        role = SessionManager.Role.Client;
+                        hasRole = true;
+                    }
+                }
+                else if (string.Equals(arg, "-ip", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    ip = args[i + 1];
+                }
+                else if (string.Equals(arg, "-port", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    ushort parsed;
+                    if (ushort.TryParse(args[i + 1], out parsed))
+                    {
+                        port = parsed;
+                    }
+                }
+            }
+
+            if (!hasRole)
+            {
+                return false;
+            }
+
+            if (role == SessionManager.Role.Client && string.IsNullOrEmpty(ip))
+            {
+                ip = "127.0.0.1";
+            }
+
+            return true;
         }
 
 

@@ -33,17 +33,28 @@ namespace StarterAssets
         protected override void Awake()
         {
             base.Awake();
-            cameraBrain.m_DefaultBlend.m_Time = 0.1f;
+            if (cameraBrain != null)
+            {
+                cameraBrain.m_DefaultBlend.m_Time = 0.1f;
+            }
         }
 
         private void Update()
         {
-            aimVirtualCamera.gameObject.SetActive(IsAiming);
+            if (aimVirtualCamera != null)
+            {
+                aimVirtualCamera.gameObject.SetActive(IsAiming);
+            }
             SetAimTarget();
         }
 
         private void SetAimTarget()
         {
+            if (Camera.main == null)
+            {
+                _aimTargetObject = null;
+                return;
+            }
             Vector2 screenCenter = new Vector2(Screen.width / 2f, Screen.height / 2f);
             Ray ray = Camera.main.ScreenPointToRay(screenCenter);
             if (Physics.Raycast(ray, out RaycastHit raycastHit, 999f, aimColliderLayerMask))

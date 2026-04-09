@@ -8,7 +8,7 @@ namespace StarterAssets
         private void CameraRotation()
         {
             Vector2 lookInput = _input.look;
-            if (UIManager.Instance.IsInventoryOpen)
+            if (UIManager.Instance != null && UIManager.Instance.IsInventoryOpen)
             {
                 lookInput = Vector2.zero;
             }
@@ -24,8 +24,11 @@ namespace StarterAssets
             _cinemachineTargetYaw = ClampAngle(_cinemachineTargetYaw, float.MinValue, float.MaxValue);
             _cinemachineTargetPitch = ClampAngle(_cinemachineTargetPitch, BottomClamp, TopClamp);
 
-            CinemachineCameraTarget.transform.rotation = Quaternion.Euler(_cinemachineTargetPitch + CameraAngleOverride,
-                _cinemachineTargetYaw, 0.0f);
+            if (CinemachineCameraTarget != null)
+            {
+                CinemachineCameraTarget.transform.rotation = Quaternion.Euler(_cinemachineTargetPitch + CameraAngleOverride,
+                    _cinemachineTargetYaw, 0.0f);
+            }
         }
 
         private static float ClampAngle(float lfAngle, float lfMin, float lfMax)

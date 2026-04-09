@@ -44,6 +44,7 @@ namespace Managers
 
         private List<InventoryItem> _inventoryItems1=new List<InventoryItem>();
         private List<InventoryItem> _inventoryItems2=new List<InventoryItem>();
+        private List<InventoryItem> _inventoryPool = new List<InventoryItem>();
 
         private bool _isInventoryOpen=false;public bool IsInventoryOpen { get => _isInventoryOpen; }
 
@@ -86,9 +87,14 @@ namespace Managers
 
         private void Update()
         {
-            if (ItemToPick == null) return;
-            ItemPickupBox.anchoredPosition = GetClampedScreenPosition(_itemToPick.transform.position);
-            ItemLootBox.anchoredPosition=GetClampedScreenPosition(_characterToLoot.transform.position);
+            if (_itemToPick != null)
+            {
+                ItemPickupBox.anchoredPosition = GetClampedScreenPosition(_itemToPick.transform.position);
+            }
+            if (_characterToLoot != null)
+            {
+                ItemLootBox.anchoredPosition = GetClampedScreenPosition(_characterToLoot.transform.position);
+            }
         }
 
         //private void StartServer()
@@ -198,7 +204,7 @@ namespace Managers
                     {
                         continue;
                     }
-                    InventoryItem item = Instantiate(InventoryItemPrefab, InventoryGrid1);
+                    InventoryItem item = GetPooledInventoryItem(InventoryGrid1);
                     item.Initialize(Character.LocalPlayer.Inventory[i]);
                     _inventoryItems1.Add(item);
                 }
@@ -228,7 +234,7 @@ namespace Managers
                     {
                         continue;
                     }
-                    InventoryItem item = Instantiate(InventoryItemPrefab, InventoryGrid1);
+                    InventoryItem item = GetPooledInventoryItem(InventoryGrid1);
                     item.Initialize(Character.LocalPlayer.Inventory[i]);
                     _inventoryItems1.Add(item);
                 } 
@@ -239,7 +245,7 @@ namespace Managers
                     {
                         continue;
                     }
-                    InventoryItem item = Instantiate(InventoryItemPrefab, InventoryGrid2);
+                    InventoryItem item = GetPooledInventoryItem(InventoryGrid2);
                     item.Initialize(_characterLootTarget.Inventory[i]);
                     _inventoryItems2.Add(item);
                 }
@@ -272,18 +278,46 @@ namespace Managers
             {
                 if( _inventoryItems1[i] != null)
                 {
-                    Destroy(_inventoryItems1[i].gameObject);
+                    ReturnInventoryItem(_inventoryItems1[i]);
                 }
             }
             for (int i = 0; i < _inventoryItems2.Count; i++)
             {
                 if (_inventoryItems2[i] != null)
                 {
-                    Destroy(_inventoryItems2[i].gameObject);
+                    ReturnInventoryItem(_inventoryItems2[i]);
                 }
             }
             _inventoryItems1.Clear();
             _inventoryItems2.Clear();
+        }
+
+        private InventoryItem GetPooledInventoryItem(Transform parent)
+        {
+            InventoryItem item = null;
+            if (_inventoryPool.Count > 0)
+            {
+                int lastIndex = _inventoryPool.Count - 1;
+                item = _inventoryPool[lastIndex];
+                _inventoryPool.RemoveAt(lastIndex);
+            }
+            if (item == null)
+            {
+                item = Instantiate(InventoryItemPrefab, parent);
+            }
+            else
+            {
+                item.transform.SetParent(parent, false);
+                item.gameObject.SetActive(true);
+            }
+            return item;
+        }
+
+        private void ReturnInventoryItem(InventoryItem item)
+        {
+            item.gameObject.SetActive(false);
+            item.transform.SetParent(transform, false);
+            _inventoryPool.Add(item);
         }
     }
 }

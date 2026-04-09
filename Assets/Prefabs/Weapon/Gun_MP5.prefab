@@ -52,7 +52,7 @@ MonoBehaviour:
   id: MP5
   weaponType: 1
   ammoID: 9x19mm
-  damage: 1
+  damage: 50
   fireRate: 0.075
   clipSize: 30
   handKick: 5

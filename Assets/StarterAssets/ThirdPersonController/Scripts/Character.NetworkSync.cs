@@ -1,72 +1,54 @@
 ﻿using Unity.Netcode;
 using UnityEngine;
+using Utility;
 
 namespace StarterAssets
 {
     public partial class Character
     {
-        [ServerRpc]
-        public void OnAimTargetChangedServerRpc(Vector3 value)
+        [System.Serializable]
+        public struct CharacterNetState : INetworkSerializable
         {
-            _aimTarget = value;
-            OnAimTargetChangedClientRpc(value);
-        }
+            public bool IsAiming;
+            public Vector3 AimTarget;
+            public Vector2 AimedMoveSpeed;
+            public float MoveSpeed;
 
-        [ClientRpc]
-        public void OnAimTargetChangedClientRpc(Vector3 value)
-        {
-            if (!IsOwner)
+            public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
             {
-                _aimTarget = value;
+                serializer.SerializeValue(ref IsAiming);
+                serializer.SerializeValue(ref AimTarget);
+                serializer.SerializeValue(ref AimedMoveSpeed);
+                serializer.SerializeValue(ref MoveSpeed);
             }
         }
 
         [ServerRpc]
-        public void OnAimingMoveChangedServerRpc(Vector2 value)
+        public void SubmitNetStateServerRpc(CharacterNetState state, ServerRpcParams rpcParams = default)
         {
-            _aimedMoveSpeed = value;
-            OnAimingMoveChangedClientRpc(value);
+            if (!InventoryOps.ValidateOwnerSender(rpcParams.Receive.SenderClientId, OwnerClientId, "NetState", true))
+            {
+                return;
+            }
+            _isAiming = state.IsAiming;
+            _aimTarget = state.AimTarget;
+            _aimedMoveSpeed = state.AimedMoveSpeed;
+            _moveSpeed = state.MoveSpeed;
+            SubmitNetStateClientRpc(state);
         }
 
         [ClientRpc]
-        public void OnAimingMoveChangedClientRpc(Vector2 value)
+        private void SubmitNetStateClientRpc(CharacterNetState state)
         {
             if (!IsOwner)
             {
-                _aimedMoveSpeed = value;
+                _isAiming = state.IsAiming;
+                _aimTarget = state.AimTarget;
+                _aimedMoveSpeed = state.AimedMoveSpeed;
+                _moveSpeed = state.MoveSpeed;
             }
         }
 
-        [ServerRpc]
-        public void OnAimingChangedServerRpc(bool value)
-        {
-            _isAiming = value;
-            OnAimingChangedClientRpc(value);
-        }
-
-        [ClientRpc]
-        public void OnAimingChangedClientRpc(bool value)
-        {
-            if (!IsOwner)
-            {
-                _isAiming = value;
-            }
-        }
-
-        [ServerRpc]
-        public void OnMoveSpeedChangedServerRpc(float value)
-        {
-            _moveSpeed = value;
-            OnMoveSpeedChangedClientRpc(value);
-        }
-
-        [ClientRpc]
-        public void OnMoveSpeedChangedClientRpc(float value)
-        {
-            if (!IsOwner)
-            {
-                _moveSpeed = value;
-            }
-        }
+        // Legacy per-field RPCs removed in favor of SubmitNetStateServerRpc.
     }
 }
